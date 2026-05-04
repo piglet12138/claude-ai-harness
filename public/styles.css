@@ -29,6 +29,27 @@ body {
   font-size: 14px;
 }
 
+.site-footer {
+  position: fixed;
+  right: 14px;
+  bottom: 8px;
+  z-index: 50;
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+}
+
+.site-footer span,
+.site-footer a {
+  color: var(--faint);
+  text-decoration: none;
+}
+
+.site-footer a:hover {
+  color: var(--muted);
+  text-decoration: underline;
+}
+
 button,
 input,
 textarea {
