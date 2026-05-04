@@ -3,133 +3,289 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="robots" content="noindex, nofollow" />
     <title>Lite Claude UI</title>
     <link rel="icon" href="/logo.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/styles.css?v=20260504-oauth-footer" />
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f3ec;
+        --paper: #fffaf2;
+        --ink: #2d251d;
+        --muted: #766b5f;
+        --line: #ddd2c3;
+        --accent: #bd5d3a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      header,
+      main,
+      footer {
+        width: min(1060px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 22px 0;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 17px;
+        font-weight: 720;
+      }
+      .brand img {
+        width: 30px;
+        height: 30px;
+      }
+      nav {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+      }
+      a {
+        color: #93482d;
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .app-link {
+        display: inline-flex;
+        min-height: 38px;
+        align-items: center;
+        border-radius: 10px;
+        background: var(--ink);
+        color: var(--paper);
+        padding: 0 14px;
+        font-weight: 680;
+      }
+      .app-link:hover {
+        background: #93482d;
+        text-decoration: none;
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(340px, 460px);
+        gap: 48px;
+        align-items: center;
+        min-height: calc(100vh - 132px);
+        padding: 32px 0 58px;
+      }
+      h1 {
+        margin: 0;
+        max-width: 720px;
+        font-size: clamp(42px, 7vw, 74px);
+        font-weight: 620;
+        line-height: 1.02;
+      }
+      .lead {
+        max-width: 660px;
+        margin: 22px 0 0;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.7;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 30px;
+      }
+      .secondary-link {
+        display: inline-flex;
+        min-height: 38px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: rgba(255, 250, 242, 0.68);
+        color: var(--ink);
+        padding: 0 14px;
+        font-weight: 650;
+      }
+      .preview {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--paper);
+        box-shadow: 0 18px 42px rgba(45, 37, 29, 0.12);
+        overflow: hidden;
+      }
+      .preview-top {
+        display: flex;
+        gap: 8px;
+        border-bottom: 1px solid var(--line);
+        padding: 14px;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #d7c9b6;
+      }
+      .preview-body {
+        padding: 22px;
+      }
+      .message {
+        margin-bottom: 18px;
+      }
+      .label {
+        margin-bottom: 7px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .bubble {
+        border-radius: 14px;
+        background: #ebe3d6;
+        padding: 13px 14px;
+        line-height: 1.55;
+      }
+      .doc {
+        border: 1px solid #e4d7c6;
+        border-radius: 12px;
+        background: #fffefb;
+        padding: 20px;
+      }
+      .doc h2 {
+        margin: 0 0 10px;
+        font-size: 22px;
+      }
+      .line {
+        height: 9px;
+        margin: 12px 0;
+        border-radius: 999px;
+        background: #e3d7c8;
+      }
+      .line.short {
+        width: 68%;
+      }
+      .features {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 48px;
+      }
+      .feature {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(255, 250, 242, 0.68);
+        padding: 18px;
+      }
+      .feature h2 {
+        margin: 0 0 8px;
+        font-size: 18px;
+      }
+      .feature p,
+      footer {
+        color: var(--muted);
+        line-height: 1.65;
+      }
+      footer {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 12px;
+        border-top: 1px solid var(--line);
+        padding: 22px 0 30px;
+        font-size: 13px;
+      }
+      footer div {
+        display: flex;
+        gap: 14px;
+      }
+      @media (max-width: 820px) {
+        .hero,
+        .features {
+          grid-template-columns: 1fr;
+        }
+        .hero {
+          min-height: auto;
+        }
+        nav {
+          gap: 10px;
+          font-size: 13px;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="app" class="app-shell">
-      <aside class="sidebar" aria-label="对话">
-        <div class="brand">
-          <img class="brand-logo" src="/logo.svg" alt="" width="28" height="28" />
-          <span>Claude</span>
+    <header>
+      <div class="brand">
+        <img src="/logo.svg" alt="" />
+        <span>Lite Claude UI</span>
+      </div>
+      <nav aria-label="Primary">
+        <a href="/privacy.html">Privacy Policy</a>
+        <a href="/terms.html">Terms</a>
+        <a class="app-link" href="/app">Open App</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <h1>Private AI document workspace.</h1>
+          <p class="lead">
+            Lite Claude UI is a lightweight chat and document preview interface for drafting, reviewing, importing and exporting documents with an AI API. It supports file upload, image input, rich previews, and optional Google Docs upload.
+          </p>
+          <div class="actions">
+            <a class="app-link" href="/app">Open Lite Claude UI</a>
+            <a class="secondary-link" href="https://github.com/piglet12138/lite-claude-ui">View source</a>
+          </div>
         </div>
-        <button id="newChat" class="primary-nav" type="button">
-          <span class="icon plus" aria-hidden="true"></span>
-          新对话
-        </button>
-        <div class="nav-label">最近</div>
-        <div id="threadList" class="thread-list"></div>
-        <div class="nav-label">文档</div>
-        <div id="documentList" class="thread-list document-list"></div>
-      </aside>
-
-      <main class="workspace">
-        <header class="topbar">
-          <button id="sidebarToggle" class="icon-button mobile-only" type="button" aria-label="切换侧栏">
-            <span class="icon menu" aria-hidden="true"></span>
-          </button>
-          <div>
-            <div class="model-pill">Claude Opus 4.7</div>
+        <div class="preview" aria-label="Application preview">
+          <div class="preview-top">
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
           </div>
-          <div class="top-actions">
-            <button id="toggleDocPanel" class="ghost-button" type="button">文档</button>
-            <button id="copyDoc" class="ghost-button" type="button">复制文档</button>
-            <button id="logout" class="icon-button" type="button" aria-label="退出登录">
-              <span class="icon logout" aria-hidden="true"></span>
-            </button>
-          </div>
-        </header>
-
-        <section id="loginView" class="login-view hidden" aria-label="登录">
-          <div class="login-card">
-            <img class="brand-logo large" src="/logo.svg" alt="" width="42" height="42" />
-            <h1>登录 Claude</h1>
-            <p>继续进入你的文档工作台。</p>
-            <form id="loginForm" class="login-form">
-              <label>
-                账号
-                <input name="email" autocomplete="username" required />
-              </label>
-              <label>
-                密码
-                <input name="password" type="password" autocomplete="current-password" required />
-              </label>
-              <button class="submit-button" type="submit">继续</button>
-              <div id="loginError" class="form-error" role="alert"></div>
-            </form>
-          </div>
-        </section>
-
-        <section id="chatView" class="chat-view hidden">
-          <div class="chat-column">
-            <section id="hero" class="hero">
-              <h1>今天想聊什么？</h1>
-              <p>一起写作、学习、编程，或者整理你的想法。</p>
-              <div class="starter-grid">
-                <button class="starter" data-prompt="请帮我起草一份高质量文档。先给完整成稿，结构包含背景、目标、核心内容、风险和下一步。主题是：">
-                  <strong>起草文档</strong>
-                  <span>从想法变成可交付成稿。</span>
-                </button>
-                <button class="starter" data-prompt="下面是一段 Google Docs 草稿。请保留原意，改写成更清晰、更自然、更适合协作审阅的版本：\n\n">
-                  <strong>改写 Docs</strong>
-                  <span>重排结构，压缩废话。</span>
-                </button>
-                <button class="starter" data-prompt="请审校下面这份文档。先指出最高优先级问题，再给重排后的大纲，最后给可替换版本：\n\n">
-                  <strong>审校结构</strong>
-                  <span>找出断点、重复和遗漏。</span>
-                </button>
-              </div>
-            </section>
-
-            <div id="messages" class="messages" aria-live="polite"></div>
-
-            <form id="composer" class="composer">
-              <div id="attachmentBar" class="attachment-bar"></div>
-              <textarea id="prompt" rows="1" placeholder="发消息给 Claude"></textarea>
-              <div class="composer-actions">
-                <label class="tool-button" title="上传文本或 Google Docs 导出的 HTML">
-                  <input id="fileInput" type="file" multiple accept="image/*,.txt,.md,.markdown,.csv,.json,.html,.htm,.xml,.log,.yaml,.yml,.docx" />
-                  <span class="icon attach" aria-hidden="true"></span>
-                </label>
-                <button id="webSearchToggle" class="tool-button text-tool" type="button" aria-pressed="false">搜索</button>
-                <button id="send" class="send-button" type="submit" aria-label="发送">
-                  <span class="icon arrow-up" aria-hidden="true"></span>
-                </button>
-              </div>
-            </form>
-          </div>
-
-          <aside id="docPanel" class="doc-panel collapsed" aria-label="文档预览">
-            <div class="doc-panel-header">
-              <div>
-                <strong id="docTitle">Artifact</strong>
-                <span id="docMeta">需要时自动生成</span>
-              </div>
-              <div class="doc-actions">
-                <div class="artifact-tabs" role="tablist" aria-label="Artifact 视图">
-                  <button id="artifactPreviewTab" class="artifact-tab active" type="button">预览</button>
-                  <button id="artifactSourceTab" class="artifact-tab" type="button">源码</button>
-                </div>
-                <button id="uploadGoogleDoc" class="ghost-button" type="button">上传 Docs</button>
-                <button id="downloadHtml" class="ghost-button" type="button">下载 HTML</button>
-                <button id="downloadDoc" class="ghost-button" type="button">下载</button>
-                <button id="closeDocPanel" class="icon-button" type="button" aria-label="关闭文档面板">×</button>
-              </div>
+          <div class="preview-body">
+            <div class="message">
+              <div class="label">Prompt</div>
+              <div class="bubble">Turn this draft into a polished project document.</div>
             </div>
-            <article id="docPreview" class="doc-preview">
-              <p class="empty-doc">当对话生成文档时，会在这里打开精排预览。</p>
-            </article>
-          </aside>
-        </section>
-      </main>
-    </div>
-    <footer class="site-footer" aria-label="Site information">
+            <div class="doc">
+              <h2>Project Document</h2>
+              <div class="line"></div>
+              <div class="line short"></div>
+              <div class="line"></div>
+              <div class="line short"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="features" aria-label="Features">
+        <article class="feature">
+          <h2>Document generation</h2>
+          <p>Create structured drafts, reports, notes and HTML artifacts with a right-side preview panel.</p>
+        </article>
+        <article class="feature">
+          <h2>Google Docs workflow</h2>
+          <p>Import exported DOCX files and optionally upload generated documents to Google Docs through OAuth.</p>
+        </article>
+        <article class="feature">
+          <h2>Private deployment</h2>
+          <p>Run a small Node.js server with your own API key, login credentials and optional search provider.</p>
+        </article>
+      </section>
+    </main>
+
+    <footer>
       <span>Lite Claude UI</span>
-      <a href="/privacy.html">Privacy Policy</a>
-      <a href="/terms.html">Terms of Service</a>
+      <div>
+        <a href="/privacy.html">Privacy Policy</a>
+        <a href="/terms.html">Terms of Service</a>
+      </div>
     </footer>
-    <script src="/app.js?v=20260504-oauth-footer" type="module"></script>
   </body>
 </html>

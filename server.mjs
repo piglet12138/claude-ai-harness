@@ -105,6 +105,10 @@ const server = http.createServer(async (req, res) => {
       return chat(req, res);
     }
 
+    if (req.method === "GET" && url.pathname === "/app") {
+      return staticFile("/app.html", res);
+    }
+
     return staticFile(url.pathname, res);
   } catch (error) {
     console.error(error);
@@ -677,7 +681,7 @@ function ensureUploadHtml(value, title) {
 function googleCallbackPage(title, detail, mode = "popup") {
   const script =
     mode === "redirect"
-      ? "setTimeout(()=>location.replace('/?google=connected'),700)"
+      ? "setTimeout(()=>location.replace('/app?google=connected'),700)"
       : "try{window.opener&&window.opener.postMessage({type:'google-auth-complete'},'*');setTimeout(()=>window.close(),900)}catch{}";
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><style>body{margin:0;display:grid;min-height:100vh;place-items:center;background:#f7f3ec;color:#2d251d;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.box{max-width:420px;border:1px solid #ddd2c3;border-radius:14px;background:#fffaf2;padding:26px;box-shadow:0 12px 34px rgba(45,37,29,.1)}h1{margin:0 0 10px;font-size:22px}p{margin:0;color:#766b5f;line-height:1.6}</style></head><body><main class="box"><h1>${escapeHtml(title)}</h1><p>${detail}</p></main><script>${script}</script></body></html>`;
 }
