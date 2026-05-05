@@ -49,7 +49,7 @@
        └─ 不需要工具  → 直接回答
 ```
 
-<img src="./docs/tool-cards.png" alt="Tool calling cards" width="600">
+<img src="./docs/code-exec.png" alt="Code Interpreter & Tool Cards" width="600">
 
 ### 日/夜双主题
 

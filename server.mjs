@@ -528,17 +528,21 @@ async function chat(req, res) {
         });
       }
 
-      // If artifact was created, stop the loop — don't carry the massive content into next round
-      if (hasArtifact) break;
-
-      // Compact approach: instead of standard tool_use/tool_result format (verbose),
-      // flatten search results into a lean text exchange to avoid context bloat.
-      if (allSearches && toolResultBlocks.length) {
+      // Compact approach: avoid carrying huge content into next round
+      if (hasArtifact) {
+        // Compress: replace the full assistant tool_use blocks with a summary
+        // so artifact content doesn't bloat the context
+        const artifactNames = result.toolUseBlocks
+          .filter((t) => t.name === "create_artifact")
+          .map((t) => t.input?.title || "Artifact");
+        apiMessages.pop(); // remove the verbose assistant content we just pushed
+        apiMessages.push({ role: "assistant", content: `已创建文档：${artifactNames.join("、")}。` });
+        apiMessages.push({ role: "user", content: "好的，请继续完成剩余的请求。如果还需要创建其他文档，请继续使用 create_artifact 工具。" });
+      } else if (allSearches && toolResultBlocks.length) {
         const searchSummary = toolResultBlocks
           .map((b) => String(b.content || "").slice(0, 600))
           .filter(Boolean)
           .join("\n\n");
-        // Replace verbose tool format with compact text
         apiMessages.push({ role: "assistant", content: `我搜索了相关信息，以下是搜索结果：\n\n${searchSummary}` });
         apiMessages.push({ role: "user", content: "好的，请基于这些信息完成我的请求。如果需要创建文档，请使用 create_artifact 工具。" });
       } else {
