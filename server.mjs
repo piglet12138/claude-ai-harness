@@ -30,6 +30,8 @@ const agenticSystemPrompt = [
   "",
   "工具使用规则：",
   "- web_search：需要最新信息或事实验证时搜索。可多次搜索。",
+  "- fetch_url：需要阅读某个网页/文章/文档的具体内容时使用。搜索后想深入了解某条结果时，用这个抓取全文。",
+  "- run_code：需要计算、数据处理、验证逻辑时执行代码。支持 JavaScript 和 Python。",
   "- create_artifact：创建文档/网页/代码等完整作品，显示在右侧面板。",
   "",
   "create_artifact 行为模式（严格遵守）：",
@@ -52,6 +54,29 @@ const anthropicTools = [
         query: { type: "string", description: "The search query, concise and specific" },
       },
       required: ["query"],
+    },
+  },
+  {
+    name: "fetch_url",
+    description: "Fetch and extract text content from a URL. Use when you need to read a specific webpage, article, documentation, or any online resource. Returns the main text content.",
+    input_schema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The URL to fetch" },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "run_code",
+    description: "Execute JavaScript or Python code in a sandboxed environment. Use for calculations, data processing, generating outputs, or demonstrating code. Returns stdout/stderr output.",
+    input_schema: {
+      type: "object",
+      properties: {
+        language: { type: "string", enum: ["javascript", "python"], description: "Programming language" },
+        code: { type: "string", description: "The code to execute" },
+      },
+      required: ["language", "code"],
     },
   },
   {
@@ -330,8 +355,8 @@ async function chat(req, res) {
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const isLastRound = round === MAX_ROUNDS - 1;
-    // After first round, only allow create_artifact (no more searching to prevent context bloat)
-    const roundTools = round === 0 ? tools : tools.filter((t) => t.name !== "web_search");
+    // After first round, remove web_search to prevent context bloat; keep fetch_url, run_code, create_artifact
+    const roundTools = round === 0 ? tools : tools.filter((t) => t.name !== "web_search" && t.name !== "fetch_url");
 
     const upstreamBody = {
       model,
@@ -380,7 +405,7 @@ async function chat(req, res) {
               if (tc.name === "create_artifact") {
                 res.write(`event: artifact\ndata: ${JSON.stringify({ title: tc.input.title || "Artifact", type: tc.input.type || "html", content: tc.input.content || "", language: tc.input.language || "", description: tc.input.description || "", file_path: tc.input.file_path || "" })}\n\n`);
               }
-              res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary })}\n\n`);
+              res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary, sources: toolResult.sources || undefined })}\n\n`);
               res.flush?.();
             }
           }
@@ -422,7 +447,7 @@ async function chat(req, res) {
           res.flush?.();
         }
 
-        res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary })}\n\n`);
+        res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary, sources: toolResult.sources || undefined, codeResult: toolResult.codeResult || undefined })}\n\n`);
         res.flush?.();
 
         toolResultBlocks.push({
@@ -489,6 +514,9 @@ function toAnthropicContent(content, role) {
       const parsed = parseDataImage(url);
       if (parsed) {
         blocks.push({ type: "image", source: parsed });
+      } else if (url) {
+        // Fallback: if data URL parsing failed, tell the model an image was attached
+        blocks.push({ type: "text", text: "[用户上传了一张图片，但解析失败]" });
       }
     } else {
       const text = String(part?.text || "").slice(0, 120000);
@@ -591,13 +619,46 @@ async function executeTool(name, args) {
   switch (name) {
     case "web_search": {
       const query = String(args?.query || "").trim();
-      if (!query) return { summary: "空查询", content: "No query provided." };
+      if (!query) return { summary: "空查询", content: "No query provided.", sources: [] };
       const results = await braveSearch(query);
-      if (!results.length) return { summary: "无结果", content: `No search results found for: ${query}` };
+      if (!results.length) return { summary: "无结果", content: `No search results found for: ${query}`, sources: [] };
       const formatted = results
-        .map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.description.slice(0, 300)}`)
+        .map((r, i) => `[${i + 1}] ${r.title}${r.age ? ` (${r.age})` : ""}\nURL: ${r.url}\n${r.description}`)
         .join("\n\n");
-      return { summary: `${results.length} 条结果`, content: formatted.slice(0, 1500) };
+      const sources = results.map((r) => ({ title: r.title, url: r.url, snippet: r.description.slice(0, 180) }));
+      return { summary: `${results.length} 条结果`, content: formatted.slice(0, 3000), sources };
+    }
+    case "fetch_url": {
+      const url = String(args?.url || "").trim();
+      if (!url) return { summary: "空 URL", content: "No URL provided." };
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(url, {
+          headers: { "user-agent": "Mozilla/5.0 (compatible; ClaudeLite/1.0)" },
+          signal: controller.signal,
+          redirect: "follow",
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) return { summary: `HTTP ${resp.status}`, content: `Failed to fetch: HTTP ${resp.status}` };
+        const html = await resp.text();
+        const text = extractTextFromHtml(html).slice(0, 6000);
+        const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "").trim().slice(0, 100);
+        return { summary: title || url.slice(0, 40), content: `[${title || url}]\n\n${text}` };
+      } catch (e) {
+        return { summary: "抓取失败", content: `Fetch error: ${e.message}` };
+      }
+    }
+    case "run_code": {
+      const lang = String(args?.language || "javascript");
+      const code = String(args?.code || "");
+      if (!code.trim()) return { summary: "空代码", content: "No code provided." };
+      try {
+        const result = await executeCode(lang, code);
+        return { summary: result.error ? "执行出错" : "执行完成", content: result.output.slice(0, 4000), codeResult: result };
+      } catch (e) {
+        return { summary: "执行���败", content: `Error: ${e.message}` };
+      }
     }
     case "create_artifact": {
       const title = String(args?.title || "Artifact").slice(0, 50);
@@ -661,6 +722,8 @@ function safeParseJson(str) {
 
 function toolDisplayArgs(name, args) {
   if (name === "web_search") return { query: args?.query };
+  if (name === "fetch_url") return { url: args?.url };
+  if (name === "run_code") return { language: args?.language, code: String(args?.code || "").slice(0, 80) };
   if (name === "create_artifact") return { title: args?.title, type: args?.type };
   return {};
 }
@@ -668,28 +731,97 @@ function toolDisplayArgs(name, args) {
 async function braveSearch(query) {
   const q = String(query || "").trim().slice(0, 300);
   if (!q) return [];
+  const hasChinese = /[\u4e00-\u9fff]/.test(q);
   const url = new URL("https://api.search.brave.com/res/v1/web/search");
   url.searchParams.set("q", q);
-  url.searchParams.set("count", String(webSearchCount));
+  url.searchParams.set("count", "8");
   url.searchParams.set("text_decorations", "false");
   url.searchParams.set("safesearch", "moderate");
-  url.searchParams.set("search_lang", /[\u4e00-\u9fff]/.test(q) ? "zh-cn" : "en");
+  url.searchParams.set("result_filter", "web,news");
+  if (hasChinese) {
+    url.searchParams.set("search_lang", "zh-cn");
+    url.searchParams.set("country", "cn");
+  }
 
   const response = await fetch(url, {
     headers: {
       accept: "application/json",
+      "accept-language": hasChinese ? "zh-CN,zh;q=0.9" : "en-US,en;q=0.9",
       "x-subscription-token": braveApiKey,
     },
   });
   if (!response.ok) return [];
   const data = await response.json();
-  return (data.web?.results || []).slice(0, webSearchCount).map((item) => ({
+
+  // Merge web results and news results for richer content
+  const webResults = (data.web?.results || []).slice(0, 6).map((item) => ({
     title: stripTags(item.title || ""),
     url: item.url || "",
-    description: stripTags(item.description || ""),
+    description: stripTags(
+      [item.description || "", ...(item.extra_snippets || [])].join(" ").trim()
+    ).slice(0, 500),
+    age: item.age || "",
   }));
+
+  const newsResults = (data.news?.results || []).slice(0, 4).map((item) => ({
+    title: stripTags(item.title || ""),
+    url: item.url || "",
+    description: stripTags(item.description || "").slice(0, 500),
+    age: item.age || "",
+  }));
+
+  // Deduplicate by URL, prefer news for freshness
+  const seen = new Set();
+  const merged = [];
+  for (const r of [...newsResults, ...webResults]) {
+    if (seen.has(r.url)) continue;
+    seen.add(r.url);
+    merged.push(r);
+  }
+  return merged.slice(0, 6);
 }
 
+function extractTextFromHtml(html) {
+  // Simple HTML to text extraction - strip tags, scripts, styles
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<nav[\s\S]*?<\/nav>/gi, "")
+    .replace(/<footer[\s\S]*?<\/footer>/gi, "")
+    .replace(/<header[\s\S]*?<\/header>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function executeCode(language, code) {
+  const { execFile } = await import("node:child_process");
+  const { writeFile, unlink } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const tmpFile = path.join(tmpdir(), `claude-exec-${Date.now()}.${language === "python" ? "py" : "mjs"}`);
+
+  await writeFile(tmpFile, code, "utf8");
+  const cmd = language === "python" ? "python3" : process.execPath;
+  const args = [tmpFile];
+
+  return new Promise((resolve) => {
+    const proc = execFile(cmd, args, { timeout: 15000, maxBuffer: 512 * 1024 }, (err, stdout, stderr) => {
+      unlink(tmpFile).catch(() => {});
+      if (err) {
+        resolve({ output: stderr || err.message || "Execution failed", error: true });
+      } else {
+        resolve({ output: stdout + (stderr ? `\n[stderr]: ${stderr}` : ""), error: false });
+      }
+    });
+  });
+}
 
 function contentToText(content) {
   if (Array.isArray(content)) {
@@ -717,12 +849,15 @@ function normalizeMessageContent(content) {
 }
 
 function parseDataImage(url) {
-  const match = String(url || "").match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,([A-Za-z0-9+/=]+)$/i);
-  if (!match) return null;
+  const str = String(url || "").trim();
+  const headerMatch = str.match(/^data:(image\/(?:png|jpe?g|webp|gif));base64,/i);
+  if (!headerMatch) return null;
+  const data = str.slice(headerMatch[0].length).replace(/[\s\r\n]/g, "").slice(0, 7_500_000);
+  if (!data) return null;
   return {
     type: "base64",
-    media_type: match[1].toLowerCase().replace("image/jpg", "image/jpeg"),
-    data: match[2].slice(0, 7_500_000),
+    media_type: headerMatch[1].toLowerCase().replace("image/jpg", "image/jpeg"),
+    data,
   };
 }
 

@@ -1,13 +1,13 @@
-const STORAGE_VERSION = "20260504-stable";
+const STORAGE_VERSION = "20260505-docs-v2";
 const THREADS_KEY = `claude-lite-threads-${STORAGE_VERSION}`;
-const DOCUMENTS_KEY = `claude-lite-documents-${STORAGE_VERSION}`;
+const OLD_THREADS_KEY = "claude-lite-threads-20260504-stable";
+const OLD_DOCUMENTS_KEY = "claude-lite-documents-20260504-stable";
 
 const state = {
   authenticated: false,
   activeId: "",
   activeDocId: "",
   threads: loadJson(THREADS_KEY, []),
-  documents: loadJson(DOCUMENTS_KEY, []),
   attachments: [],
   streaming: false,
   docOpen: false,
@@ -15,6 +15,24 @@ const state = {
   expectDocument: false,
   webSearchEnabled: false,
 };
+
+// Migration: move global documents into their threads
+(function migrate() {
+  if (state.threads.length) return; // already migrated or fresh
+  const oldThreads = loadJson(OLD_THREADS_KEY, []);
+  const oldDocs = loadJson(OLD_DOCUMENTS_KEY, []);
+  if (!oldThreads.length) return;
+  for (const t of oldThreads) t.documents = t.documents || [];
+  for (const doc of oldDocs) {
+    const thread = oldThreads.find((t) => t.id === doc.threadId) || oldThreads[0];
+    if (thread) {
+      thread.documents = thread.documents || [];
+      thread.documents.push(doc);
+    }
+  }
+  state.threads = oldThreads;
+  saveThreads();
+})();
 
 const els = {
   loginView: document.querySelector("#loginView"),
@@ -34,7 +52,7 @@ const els = {
   attachmentBar: document.querySelector("#attachmentBar"),
   copyDoc: document.querySelector("#copyDoc"),
   downloadDoc: document.querySelector("#downloadDoc"),
-  downloadHtml: document.querySelector("#downloadHtml"),
+  downloadHtml: document.querySelector("#downloadHtml"), // may be null
   uploadGoogleDoc: document.querySelector("#uploadGoogleDoc"),
   docPanel: document.querySelector("#docPanel"),
   docTitle: document.querySelector("#docTitle"),
@@ -54,12 +72,30 @@ let streamRenderQueued = false;
 init();
 
 async function init() {
+  initTheme();
   wireEvents();
   const session = await fetchJson("/api/session").catch(() => ({ authenticated: false }));
   state.authenticated = session.authenticated;
-  state.activeDocId ||= state.documents[0]?.id || "";
   state.docOpen = false;
   state.authenticated ? showChat() : showLogin();
+}
+
+function initTheme() {
+  const saved = localStorage.getItem("claude-lite-theme");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const theme = saved || (prefersDark ? "dark" : "light");
+  document.documentElement.setAttribute("data-theme", theme);
+  const btn = document.querySelector("#themeToggle");
+  if (btn) btn.textContent = theme === "dark" ? "☀" : "☾";
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute("data-theme") || "light";
+  const next = current === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem("claude-lite-theme", next);
+  const btn = document.querySelector("#themeToggle");
+  if (btn) btn.textContent = next === "dark" ? "☀" : "☾";
 }
 
 function wireEvents() {
@@ -80,13 +116,16 @@ function wireEvents() {
     }
   });
   els.fileInput.addEventListener("change", handleFiles);
-  els.webSearchToggle.addEventListener("click", () => {
+  els.webSearchToggle?.addEventListener("click", () => {
     state.webSearchEnabled = !state.webSearchEnabled;
     renderSearchToggle();
   });
-  els.copyDoc.addEventListener("click", copyCurrentDoc);
-  els.downloadDoc.addEventListener("click", () => downloadCurrentDoc("markdown"));
-  els.downloadHtml.addEventListener("click", () => downloadCurrentDoc("html"));
+  document.querySelector("#themeToggle")?.addEventListener("click", toggleTheme);
+  els.copyDoc?.addEventListener("click", copyCurrentDoc);
+  els.downloadDoc.addEventListener("click", () => {
+    const doc = activeDocument();
+    downloadCurrentDoc(doc?.type === "html" ? "html" : "markdown");
+  });
   els.uploadGoogleDoc.addEventListener("click", uploadCurrentDocToGoogle);
   els.artifactPreviewTab.addEventListener("click", () => setArtifactView("preview"));
   els.artifactSourceTab.addEventListener("click", () => setArtifactView("source"));
@@ -99,7 +138,7 @@ function wireEvents() {
     state.docOpen = !state.docOpen;
     if (state.docOpen) state.docAutoOpenSuppressedThreadId = "";
     else state.docAutoOpenSuppressedThreadId = state.activeId;
-    if (state.docOpen && !state.activeDocId && state.documents[0]) state.activeDocId = state.documents[0].id;
+    if (state.docOpen && !state.activeDocId && threadDocuments()[0]) state.activeDocId = threadDocuments()[0].id;
     renderDocumentPanel();
   });
   els.sidebarToggle.addEventListener("click", () => document.body.classList.toggle("sidebar-open"));
@@ -151,9 +190,10 @@ function showChat() {
 }
 
 function createThread() {
-  const thread = { id: crypto.randomUUID(), title: "新对话", messages: [], createdAt: Date.now() };
+  const thread = { id: crypto.randomUUID(), title: "新对话", messages: [], documents: [], createdAt: Date.now() };
   state.threads.unshift(thread);
   state.activeId = thread.id;
+  state.activeDocId = "";
   saveThreads();
   return thread;
 }
@@ -163,7 +203,12 @@ function activeThread() {
 }
 
 function activeDocument() {
-  return state.documents.find((doc) => doc.id === state.activeDocId) || null;
+  const thread = activeThread();
+  return (thread.documents || []).find((doc) => doc.id === state.activeDocId) || null;
+}
+
+function threadDocuments() {
+  return activeThread().documents || [];
 }
 
 function render() {
@@ -177,44 +222,151 @@ function render() {
 
 function renderThreads() {
   els.threadList.innerHTML = "";
-  for (const thread of state.threads) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `thread-item${thread.id === state.activeId ? " active" : ""}`;
-    button.textContent = thread.title || "新对话";
-    button.addEventListener("click", () => {
+  const visible = state.threads.filter((t) => !t.archived);
+  for (const thread of visible) {
+    const item = document.createElement("div");
+    item.className = `thread-item${thread.id === state.activeId ? " active" : ""}`;
+    const label = document.createElement("span");
+    label.className = "thread-label";
+    label.textContent = thread.title || "新对话";
+    item.append(label);
+
+    const more = document.createElement("button");
+    more.className = "thread-more-btn";
+    more.textContent = "⋯";
+    more.title = "更多操作";
+    more.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showContextMenu(e.currentTarget, [
+        { label: "重命名", action: () => renameThread(thread.id) },
+        { label: "删除", action: () => deleteThread(thread.id), danger: true },
+      ]);
+    });
+    item.append(more);
+
+    item.addEventListener("click", (e) => {
+      if (e.target.closest(".thread-more-btn")) return;
       state.activeId = thread.id;
+      // Switch to this thread's first document
+      const docs = thread.documents || [];
+      state.activeDocId = docs[0]?.id || "";
+      state.docOpen = docs.length > 0 && state.docOpen;
       document.body.classList.remove("sidebar-open");
       render();
     });
-    els.threadList.append(button);
+    els.threadList.append(item);
   }
+  // Show archived count if any
+  const archivedCount = state.threads.filter((t) => t.archived).length;
+  if (archivedCount) {
+    const archiveBtn = document.createElement("button");
+    archiveBtn.type = "button";
+    archiveBtn.className = "thread-item archive-toggle";
+    archiveBtn.textContent = `📦 已归档 (${archivedCount})`;
+    archiveBtn.addEventListener("click", () => {
+      state._showArchived = !state._showArchived;
+      renderThreads();
+    });
+    els.threadList.append(archiveBtn);
+    if (state._showArchived) {
+      for (const thread of state.threads.filter((t) => t.archived)) {
+        const item = document.createElement("div");
+        item.className = "thread-item archived";
+        item.innerHTML = `<span class="thread-label">${escapeHtml(thread.title || "��对话")}</span>`;
+        const restore = document.createElement("button");
+        restore.className = "thread-more-btn";
+        restore.title = "恢复";
+        restore.textContent = "↩";
+        restore.addEventListener("click", (e) => { e.stopPropagation(); thread.archived = false; saveThreads(); render(); });
+        item.append(restore);
+        item.addEventListener("click", () => { state.activeId = thread.id; render(); });
+        els.threadList.append(item);
+      }
+    }
+  }
+}
+
+function showContextMenu(anchor, items) {
+  // Remove any existing menu
+  document.querySelector(".ctx-menu")?.remove();
+  const menu = document.createElement("div");
+  menu.className = "ctx-menu";
+  for (const item of items) {
+    const btn = document.createElement("button");
+    btn.className = `ctx-menu-item${item.danger ? " danger" : ""}`;
+    btn.textContent = item.label;
+    btn.addEventListener("click", () => { menu.remove(); item.action(); });
+    menu.append(btn);
+  }
+  document.body.append(menu);
+  // Position near anchor
+  const rect = anchor.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.left = `${Math.min(rect.left, window.innerWidth - 140)}px`;
+  // Close on outside click
+  const close = (e) => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener("click", close, true); } };
+  setTimeout(() => document.addEventListener("click", close, true), 0);
+}
+
+function deleteThread(id) {
+  if (!confirm("确定删除这个对话？")) return;
+  state.threads = state.threads.filter((t) => t.id !== id);
+  if (state.activeId === id) {
+    state.activeId = state.threads[0]?.id || "";
+    if (!state.threads.length) createThread();
+  }
+  saveThreads();
+  render();
+}
+
+function renameThread(id) {
+  const thread = state.threads.find((t) => t.id === id);
+  if (!thread) return;
+  const name = prompt("重命名对话：", thread.title || "");
+  if (name === null) return;
+  thread.title = name.trim() || "新对话";
+  saveThreads();
+  renderThreads();
 }
 
 function renderDocuments() {
   els.documentList.innerHTML = "";
-  if (!state.documents.length) {
-    const empty = document.createElement("button");
-    empty.type = "button";
+  const docs = threadDocuments();
+  if (!docs.length) {
+    const empty = document.createElement("div");
     empty.className = "thread-item";
-    empty.innerHTML = "<span>暂无 Artifact</span><small>生成后会出现在这里</small>";
-    empty.disabled = true;
+    empty.innerHTML = "<span>暂无文档</span><small>生成或上传后出现在这里</small>";
     els.documentList.append(empty);
     return;
   }
-  for (const doc of state.documents) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `thread-item${doc.id === state.activeDocId ? " active" : ""}`;
-    button.innerHTML = `<span>${escapeHtml(doc.title)}</span><small>${new Date(doc.updatedAt).toLocaleString()}</small>`;
-    button.addEventListener("click", () => {
+  for (const doc of docs) {
+    const item = document.createElement("div");
+    item.className = `thread-item${doc.id === state.activeDocId ? " active" : ""}`;
+    item.innerHTML = `<span class="thread-label">${escapeHtml(doc.title)}</span><small>${doc.source || ""}</small>`;
+
+    const more = document.createElement("button");
+    more.className = "thread-more-btn";
+    more.textContent = "⋯";
+    more.title = "更多操作";
+    more.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const thread = activeThread();
+      showContextMenu(e.currentTarget, [
+        { label: "重命名", action: () => { const n = prompt("重命名：", doc.title); if (n !== null) { doc.title = n.trim() || doc.title; saveThreads(); render(); } } },
+        { label: "删除", action: () => { if (!confirm(`删除「${doc.title}」？`)) return; thread.documents = (thread.documents || []).filter((d) => d.id !== doc.id); if (state.activeDocId === doc.id) state.activeDocId = (thread.documents[0]?.id) || ""; saveThreads(); render(); }, danger: true },
+      ]);
+    });
+    item.append(more);
+
+    item.addEventListener("click", (e) => {
+      if (e.target.closest(".thread-more-btn")) return;
       state.activeDocId = doc.id;
       state.docOpen = true;
       state.docAutoOpenSuppressedThreadId = "";
       document.body.classList.remove("sidebar-open");
       render();
     });
-    els.documentList.append(button);
+    els.documentList.append(item);
   }
 }
 
@@ -264,8 +416,10 @@ function renderMessages() {
 }
 
 function renderUserMessage(message) {
-  const images = Array.isArray(message.attachments) ? message.attachments.filter((item) => item.kind === "image" && item.dataUrl) : [];
-  const text = stripImagePlaceholders(message.content || "").trim();
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  const images = attachments.filter((item) => item.kind === "image" && item.dataUrl);
+  const files = attachments.filter((item) => item.kind !== "image");
+  const text = (message.content || "").trim();
   const parts = [];
   if (images.length) {
     parts.push(
@@ -275,6 +429,11 @@ function renderUserMessage(message) {
             `<figure class="sent-image" title="${escapeAttribute(image.name || "上传图片")}"><img src="${escapeAttribute(image.dataUrl)}" alt="${escapeAttribute(image.name || "上传图片")}" loading="lazy"></figure>`,
         )
         .join("")}</div>`,
+    );
+  }
+  if (files.length) {
+    parts.push(
+      `<div class="sent-files">${files.map((f) => `<span class="file-chip">📎 ${escapeHtml(f.name)}</span>`).join("")}</div>`,
     );
   }
   if (text) parts.push(`<div class="message-text">${escapeHtml(text)}</div>`);
@@ -299,25 +458,122 @@ function renderMessageActions(message, isStreamingMessage) {
     }, 1200);
   });
   actions.append(copy);
+
+  // Regenerate button (only on last assistant message, not during streaming)
+  const thread = activeThread();
+  const isLast = message === thread.messages.at(-1);
+  if (isLast && !isStreamingMessage) {
+    const regen = document.createElement("button");
+    regen.type = "button";
+    regen.className = "message-action";
+    regen.title = "重新生成";
+    regen.innerHTML = `<span class="icon-regen" aria-hidden="true">↻</span><span>重新生成</span>`;
+    regen.addEventListener("click", () => regenerateLastMessage());
+    actions.append(regen);
+  }
   return actions;
+}
+
+function regenerateLastMessage() {
+  if (state.streaming) return;
+  const thread = activeThread();
+  // Remove last assistant message
+  if (thread.messages.at(-1)?.role === "assistant") thread.messages.pop();
+  // Get the last user message to resend
+  const lastUser = thread.messages.at(-1);
+  if (!lastUser || lastUser.role !== "user") return;
+  // Re-trigger send with existing user message
+  thread.messages.push({ role: "assistant", content: "", toolCalls: [] });
+  state.streaming = true;
+  els.send.disabled = true;
+  saveThreads();
+  render();
+  // Re-fetch
+  (async () => {
+    try {
+      const apiContent = lastUser.content;
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ messages: messagesForApi(thread, apiContent) }),
+      });
+      if (!response.ok || !response.body) throw new Error(await response.text());
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const assistant = thread.messages.at(-1);
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const sseBlocks = buffer.split(/\r?\n\r?\n/);
+        buffer = sseBlocks.pop() || "";
+        for (const block of sseBlocks) {
+          if (block.startsWith(":")) continue;
+          const lines = block.split(/\r?\n/);
+          let eventType = "";
+          let dataStr = "";
+          for (const l of lines) {
+            if (l.startsWith("event:")) eventType = l.slice(6).trim();
+            else if (l.startsWith("data:")) dataStr = l.slice(5).trim();
+          }
+          if (!dataStr) continue;
+          let data;
+          try { data = JSON.parse(dataStr); } catch { continue; }
+          handleSSEEvent(eventType, data, assistant, thread);
+        }
+      }
+      if (!assistant.toolCalls?.some((t) => t.name === "create_artifact")) {
+        if (looksLikeRunnableArtifact(assistant.content)) {
+          upsertArtifactFromAssistant(assistant.content, thread);
+        }
+      }
+    } catch (error) {
+      thread.messages.at(-1).content ||= `请求失败：${String(error.message || error).slice(0, 500)}`;
+    } finally {
+      state.streaming = false;
+      els.send.disabled = false;
+      saveThreads();
+      saveDocuments();
+      render();
+    }
+  })();
 }
 
 function renderToolCard(tc) {
   const card = document.createElement("div");
   card.className = `tool-card ${tc.status || "running"}`;
+  const isExpandable = (tc.name === "web_search" && tc.sources?.length) || (tc.name === "run_code" && tc.codeResult);
+  const isClickable = tc.name === "create_artifact" && tc.status === "completed";
+  if (isExpandable || isClickable) card.classList.add("interactive");
 
-  const iconText = tc.name === "web_search" ? "🔍" : tc.name === "create_artifact" ? "📄" : "🔧";
+  const icons = { web_search: "○", fetch_url: "◎", run_code: "▸", create_artifact: "◆" };
+  const iconText = icons[tc.name] || "·";
   let label = tc.name;
   if (tc.name === "web_search") label = `搜索「${tc.args?.query || "..."}」`;
+  else if (tc.name === "fetch_url") label = `读取 ${tc.args?.url ? new URL(tc.args.url).hostname : "..."}`;
+  else if (tc.name === "run_code") label = `运行 ${tc.args?.language || "code"}`;
   else if (tc.name === "create_artifact") label = `创建「${tc.args?.title || "Artifact"}」`;
 
   const header = document.createElement("div");
   header.className = "tool-card-header";
+  const statusIcon = tc.status === "completed" ? `<span class="tool-check">✓</span>` : "";
   header.innerHTML = `<span class="tool-icon">${iconText}</span><span class="tool-label">${escapeHtml(label)}</span>`;
   if (tc.status === "running") {
     const spinner = document.createElement("span");
     spinner.className = "tool-spinner";
     header.append(spinner);
+  } else if (tc.status === "completed") {
+    const check = document.createElement("span");
+    check.className = "tool-check";
+    check.textContent = "✓";
+    header.append(check);
+  }
+
+  if (isExpandable) {
+    const chevron = document.createElement("span");
+    chevron.className = `tool-chevron${tc._expanded ? " expanded" : ""}`;
+    header.append(chevron);
   }
   card.append(header);
 
@@ -326,6 +582,53 @@ function renderToolCard(tc) {
     result.className = "tool-card-result";
     result.textContent = tc.summary;
     card.append(result);
+  }
+
+  // Expandable sources for web_search
+  if (tc.name === "web_search" && tc.sources?.length) {
+    const sources = document.createElement("div");
+    sources.className = `tool-sources${tc._expanded ? " expanded" : ""}`;
+    for (const src of tc.sources) {
+      const item = document.createElement("a");
+      item.className = "tool-source-item";
+      item.href = src.url;
+      item.target = "_blank";
+      item.rel = "noopener noreferrer";
+      item.innerHTML = `<span class="source-title">${escapeHtml(src.title)}</span><span class="source-snippet">${escapeHtml(src.snippet)}</span>`;
+      sources.append(item);
+    }
+    card.append(sources);
+    card.addEventListener("click", (e) => {
+      if (e.target.closest("a")) return;
+      tc._expanded = !tc._expanded;
+      sources.classList.toggle("expanded", tc._expanded);
+      card.querySelector(".tool-chevron")?.classList.toggle("expanded", tc._expanded);
+    });
+  }
+
+  // Expandable output for run_code
+  if (tc.name === "run_code" && tc.codeResult) {
+    const output = document.createElement("div");
+    output.className = `tool-code-output${tc._expanded ? " expanded" : ""}`;
+    const pre = document.createElement("pre");
+    pre.textContent = tc.codeResult.output || "(no output)";
+    if (tc.codeResult.error) pre.classList.add("error");
+    output.append(pre);
+    card.append(output);
+    card.addEventListener("click", () => {
+      tc._expanded = !tc._expanded;
+      output.classList.toggle("expanded", tc._expanded);
+      card.querySelector(".tool-chevron")?.classList.toggle("expanded", tc._expanded);
+    });
+  }
+
+  // Clickable artifact card → open doc panel
+  if (isClickable) {
+    card.addEventListener("click", () => {
+      state.docOpen = true;
+      state.docAutoOpenSuppressedThreadId = "";
+      renderDocumentPanel();
+    });
   }
 
   return card;
@@ -358,8 +661,8 @@ function renderAttachments() {
 }
 
 function renderSearchToggle() {
-  els.webSearchToggle.classList.toggle("active", state.webSearchEnabled);
-  els.webSearchToggle.setAttribute("aria-pressed", String(state.webSearchEnabled));
+  els.webSearchToggle?.classList.toggle("active", state.webSearchEnabled);
+  els.webSearchToggle?.setAttribute("aria-pressed", String(state.webSearchEnabled));
 }
 
 function queueStreamRender(thread, assistant) {
@@ -367,13 +670,67 @@ function queueStreamRender(thread, assistant) {
   streamRenderQueued = true;
   requestAnimationFrame(() => {
     streamRenderQueued = false;
-    renderMessages();
+    updateStreamingMessage(assistant);
   });
+}
+
+function updateStreamingMessage(assistant) {
+  // Find or create the streaming message DOM node
+  let wrapper = els.messages.querySelector(".message.assistant.streaming");
+  if (!wrapper) {
+    // Fallback: full re-render if streaming node not found
+    renderMessages();
+    return;
+  }
+  const body = wrapper.querySelector(".message-body");
+  if (!body) return;
+
+  // Update tool cards
+  let toolsDiv = body.querySelector(".tool-calls");
+  if (assistant.toolCalls?.length) {
+    if (!toolsDiv) {
+      toolsDiv = document.createElement("div");
+      toolsDiv.className = "tool-calls";
+      body.prepend(toolsDiv);
+    }
+    // Only re-render tool cards if count changed or status changed
+    const existingCount = toolsDiv.children.length;
+    const needsUpdate = existingCount !== assistant.toolCalls.length ||
+      assistant.toolCalls.some((tc, i) => {
+        const card = toolsDiv.children[i];
+        return card && !card.classList.contains(tc.status || "running");
+      });
+    if (needsUpdate) {
+      toolsDiv.innerHTML = "";
+      for (const tc of assistant.toolCalls) {
+        toolsDiv.append(renderToolCard(tc));
+      }
+    }
+  }
+
+  // Update text bubble
+  let bubble = body.querySelector(".message-bubble.streaming");
+  const content = displayAssistantMessage(assistant.content);
+  if (content.trim()) {
+    if (!bubble) {
+      bubble = document.createElement("div");
+      bubble.className = "message-bubble streaming";
+      // Insert before message-actions
+      const actions = body.querySelector(".message-actions");
+      if (actions) body.insertBefore(bubble, actions);
+      else body.append(bubble);
+    }
+    bubble.innerHTML = renderRichDocument(content, "chat");
+  }
+
+  // Scroll to bottom
+  els.messages.scrollTop = els.messages.scrollHeight;
 }
 
 function renderDocumentPanel() {
   els.chatView.classList.toggle("doc-closed", !state.docOpen);
   els.docPanel.classList.toggle("collapsed", !state.docOpen);
+  renderDocTabs();
   const doc = activeDocument();
   if (!doc) {
     els.docTitle.textContent = "文档";
@@ -386,23 +743,87 @@ function renderDocumentPanel() {
   doc.view ||= defaultArtifactView(doc);
   els.docTitle.textContent = doc.title;
   els.docMeta.textContent = artifactMeta(doc);
-  els.downloadHtml.classList.toggle("hidden", doc.type !== "document" && doc.type !== "html");
+  els.downloadHtml?.classList.toggle("hidden", doc.type !== "document" && doc.type !== "html");
   els.downloadDoc.textContent = doc.type === "html" ? "下载源码" : "下载";
+  // Version navigation
+  renderVersionNav(doc);
   els.uploadGoogleDoc.disabled = false;
   els.artifactPreviewTab.classList.toggle("active", doc.view === "preview");
   els.artifactSourceTab.classList.toggle("active", doc.view === "source");
   els.artifactPreviewTab.disabled = doc.type === "code";
+  const displayContent = getDocContent(doc);
   if (doc.view === "source") {
     els.docPreview.className = "doc-preview source-preview";
-    els.docPreview.innerHTML = `<pre><code>${escapeHtml(doc.content)}</code></pre>`;
+    els.docPreview.innerHTML = `<pre><code>${escapeHtml(displayContent)}</code></pre>`;
     return;
   }
   els.docPreview.className = `doc-preview ${doc.type === "html" ? "html-preview" : ""}`;
   if (doc.type === "html") {
-    els.docPreview.innerHTML = `<iframe title="Artifact preview" sandbox="allow-scripts allow-forms allow-modals allow-popups" srcdoc="${escapeAttribute(doc.content)}"></iframe>`;
+    els.docPreview.innerHTML = `<iframe title="Artifact preview" sandbox="allow-scripts allow-forms allow-modals allow-popups" srcdoc="${escapeAttribute(displayContent)}"></iframe>`;
   } else {
-    els.docPreview.innerHTML = renderRichDocument(doc.content, "document");
+    els.docPreview.innerHTML = renderRichDocument(displayContent, "document");
   }
+}
+
+function renderDocTabs() {
+  let tabs = document.querySelector(".doc-tabs");
+  const docs = threadDocuments();
+  if (docs.length <= 1) {
+    if (tabs) tabs.remove();
+    return;
+  }
+  if (!tabs) {
+    tabs = document.createElement("div");
+    tabs.className = "doc-tabs";
+    // Insert after doc-panel-header
+    const header = els.docPanel.querySelector(".doc-panel-header");
+    if (header) header.after(tabs);
+    else els.docPanel.prepend(tabs);
+  }
+  tabs.innerHTML = "";
+  for (const doc of docs) {
+    const tab = document.createElement("button");
+    tab.className = `doc-tab${doc.id === state.activeDocId ? " active" : ""}`;
+    tab.textContent = (doc.title || "文档").slice(0, 20);
+    tab.title = doc.title || "文档";
+    tab.addEventListener("click", () => {
+      state.activeDocId = doc.id;
+      renderDocumentPanel();
+      renderDocuments();
+    });
+    tabs.append(tab);
+  }
+}
+
+function renderVersionNav(doc) {
+  let nav = document.querySelector(".version-nav");
+  if (!doc.versions?.length) {
+    if (nav) nav.remove();
+    return;
+  }
+  if (!nav) {
+    nav = document.createElement("div");
+    nav.className = "version-nav";
+    els.docPanel.querySelector(".doc-panel-header")?.append(nav);
+  }
+  const total = doc.versions.length + 1; // versions + current
+  const current = doc.versionIndex ?? doc.versions.length;
+  nav.innerHTML = `<button class="version-btn" data-dir="prev" ${current <= 0 ? "disabled" : ""}>‹</button><span class="version-label">v${current + 1}/${total}</span><button class="version-btn" data-dir="next" ${current >= doc.versions.length ? "disabled" : ""}>›</button>`;
+  nav.onclick = (e) => {
+    const btn = e.target.closest(".version-btn");
+    if (!btn || btn.disabled) return;
+    if (btn.dataset.dir === "prev") doc.versionIndex = Math.max(0, current - 1);
+    else doc.versionIndex = Math.min(doc.versions.length, current + 1);
+    saveDocuments();
+    renderDocumentPanel();
+  };
+}
+
+function getDocContent(doc) {
+  if (!doc.versions?.length) return doc.content;
+  const idx = doc.versionIndex ?? doc.versions.length;
+  if (idx >= doc.versions.length) return doc.content; // current/latest
+  return doc.versions[idx].content;
 }
 
 function setArtifactView(view) {
@@ -421,9 +842,8 @@ async function send(event) {
 
   const thread = activeThread();
   const attachments = [...state.attachments];
-  const displayAttachments = attachmentsForMessage(attachments);
-  const attachmentText = attachments.filter((file) => file.kind !== "image").map(attachmentTextForMessage).join("");
-  const userContent = `${text}${attachmentText}`.trim();
+  const displayAttachments = attachmentsForDisplay(attachments);
+  const userContent = text || (attachments.length ? attachments.map((f) => f.name).join(", ") : "");
   const apiContent = buildUserApiContent(text, attachments);
   state.expectDocument = false; // Artifact creation is now driven by tool use only
 
@@ -471,47 +891,7 @@ async function send(event) {
         let data;
         try { data = JSON.parse(dataStr); } catch { continue; }
 
-        switch (eventType) {
-          case "tool_start":
-            assistant.toolCalls = assistant.toolCalls || [];
-            assistant.toolCalls.push({
-              id: data.id,
-              name: data.name,
-              args: data.args || {},
-              summary: "",
-              status: "running",
-            });
-            queueStreamRender(thread, assistant);
-            break;
-
-          case "tool_result":
-            if (assistant.toolCalls) {
-              const tc = assistant.toolCalls.find((t) => t.id === data.id);
-              if (tc) {
-                tc.summary = data.summary || "";
-                tc.status = "completed";
-              }
-            }
-            queueStreamRender(thread, assistant);
-            break;
-
-          case "artifact":
-            upsertArtifactFromTool(data, thread);
-            renderDocuments();
-            renderDocumentPanel();
-            break;
-
-          case "done":
-            break;
-
-          default:
-            // Regular data event (content delta)
-            if (data.delta) {
-              assistant.content += data.delta;
-              queueStreamRender(thread, assistant);
-            }
-            break;
-        }
+        handleSSEEvent(eventType, data, assistant, thread);
       }
     }
     // Only detect inline HTML artifacts as fallback (e.g. model outputs raw HTML without tool)
@@ -532,12 +912,54 @@ async function send(event) {
   }
 }
 
+function handleSSEEvent(eventType, data, assistant, thread) {
+  switch (eventType) {
+    case "tool_start":
+      assistant.toolCalls = assistant.toolCalls || [];
+      assistant.toolCalls.push({
+        id: data.id,
+        name: data.name,
+        args: data.args || {},
+        summary: "",
+        status: "running",
+      });
+      queueStreamRender(thread, assistant);
+      break;
+    case "tool_result":
+      if (assistant.toolCalls) {
+        const tc = assistant.toolCalls.find((t) => t.id === data.id);
+        if (tc) {
+          tc.summary = data.summary || "";
+          tc.status = "completed";
+          if (data.sources) tc.sources = data.sources;
+          if (data.codeResult) tc.codeResult = data.codeResult;
+        }
+      }
+      queueStreamRender(thread, assistant);
+      break;
+    case "artifact":
+      upsertArtifactFromTool(data, thread);
+      renderDocuments();
+      renderDocumentPanel();
+      break;
+    case "done":
+      break;
+    default:
+      if (data.delta) {
+        assistant.content += data.delta;
+        queueStreamRender(thread, assistant);
+      }
+      break;
+  }
+}
+
 function upsertArtifactFromTool(data, thread) {
-  const existing = state.documents.find((doc) => doc.threadId === thread.id);
+  thread.documents = thread.documents || [];
+  // Find existing artifact with same title in this thread, or create new
+  const existing = thread.documents.find((doc) => doc.title === (data.title || "Artifact"));
   const artifactType = data.type || "html";
   const payload = {
     id: existing?.id || crypto.randomUUID(),
-    threadId: thread.id,
     title: data.title || "Artifact",
     content: data.content || "",
     type: artifactType,
@@ -548,21 +970,29 @@ function upsertArtifactFromTool(data, thread) {
     view: artifactType === "code" ? "source" : "preview",
     updatedAt: Date.now(),
   };
-  if (existing) Object.assign(existing, payload);
-  else state.documents.unshift(payload);
+  if (existing) {
+    existing.versions = existing.versions || [];
+    existing.versions.push({ content: existing.content, title: existing.title, updatedAt: existing.updatedAt });
+    if (existing.versions.length > 5) existing.versions.shift();
+    Object.assign(existing, payload);
+    existing.versionIndex = existing.versions.length;
+  } else {
+    payload.versions = [];
+    payload.versionIndex = 0;
+    thread.documents.unshift(payload);
+  }
   state.activeDocId = payload.id;
   if (state.docAutoOpenSuppressedThreadId !== thread.id) {
     state.docOpen = true;
   }
-  saveDocuments();
+  saveThreads();
 }
 
 function upsertArtifactFromAssistant(content, thread) {
+  thread.documents = thread.documents || [];
   const artifact = extractArtifact(content, thread);
-  const existing = state.documents.find((doc) => doc.threadId === thread.id);
   const payload = {
-    id: existing?.id || crypto.randomUUID(),
-    threadId: thread.id,
+    id: crypto.randomUUID(),
     title: artifact.title,
     content: artifact.content,
     type: artifact.type,
@@ -572,14 +1002,15 @@ function upsertArtifactFromAssistant(content, thread) {
     source: artifact.source,
     view: artifact.view,
     updatedAt: Date.now(),
+    versions: [],
+    versionIndex: 0,
   };
-  if (existing) Object.assign(existing, payload);
-  else state.documents.unshift(payload);
+  thread.documents.unshift(payload);
   state.activeDocId = payload.id;
   if (state.docAutoOpenSuppressedThreadId !== thread.id) {
     state.docOpen = true;
   }
-  saveDocuments();
+  saveThreads();
 }
 
 async function handleFiles() {
@@ -640,25 +1071,22 @@ async function addFileAttachment(file) {
   }
 }
 
-function attachmentTextForMessage(file) {
-  if (file.kind === "image") return `\n\n[图片：${file.name}]`;
-  return `\n\n[附件：${file.name}]\n${file.content}`;
-}
-
-function attachmentsForMessage(attachments) {
-  return attachments
-    .filter((file) => file.kind === "image" && file.dataUrl)
-    .map((file) => ({
-      kind: "image",
-      name: file.name,
-      mime: file.mime,
-      dataUrl: file.dataUrl,
-    }));
+function attachmentsForDisplay(attachments) {
+  return attachments.map((file) => ({
+    kind: file.kind,
+    name: file.name,
+    mime: file.mime,
+    dataUrl: file.dataUrl || "",
+  }));
 }
 
 function buildUserApiContent(text, attachments) {
   const parts = [];
-  const textContent = `${text}${attachments.filter((file) => file.kind !== "image").map(attachmentTextForMessage).join("")}`.trim();
+  // Build text part: user message + file contents (for context)
+  const fileParts = attachments
+    .filter((f) => f.kind !== "image" && f.content)
+    .map((f) => `[附件：${f.name}]\n${f.content}`);
+  const textContent = [text, ...fileParts].filter(Boolean).join("\n\n").trim();
   if (textContent) parts.push({ type: "text", text: textContent });
   for (const file of attachments) {
     if (file.kind === "image") parts.push({ type: "image_url", image_url: { url: file.dataUrl } });
@@ -721,20 +1149,24 @@ async function convertDocx(file) {
 }
 
 function addUploadedDocument(title, content, source, type = "document") {
+  const thread = activeThread();
+  thread.documents = thread.documents || [];
   const doc = {
     id: crypto.randomUUID(),
-    threadId: "",
     title,
-    content: String(content || "").slice(0, type === "html" ? 500000 : 100000),
+    content: String(content || "").slice(0, type === "html" ? 200000 : 80000),
     type,
     language: type === "html" ? "html" : "markdown",
     source,
     view: defaultArtifactView({ type }),
     updatedAt: Date.now(),
+    versions: [],
+    versionIndex: 0,
   };
-  state.documents.unshift(doc);
+  thread.documents.unshift(doc);
   state.activeDocId = doc.id;
   state.docOpen = true;
+  saveThreads();
 }
 
 async function copyCurrentDoc() {
@@ -1025,7 +1457,7 @@ function saveThreads() {
 }
 
 function saveDocuments() {
-  localStorage.setItem(DOCUMENTS_KEY, JSON.stringify(state.documents.slice(0, 50)));
+  saveThreads(); // documents now live inside threads
 }
 
 async function fetchJson(url) {
