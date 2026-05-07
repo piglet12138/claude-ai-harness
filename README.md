@@ -24,7 +24,7 @@
 
 市面上的开源 AI UI（LibreChat、Open WebUI）功能全但太重 — MongoDB、Redis、LangChain，512MB 的 VPS 跑不动。
 
-**Lite Claude UI 用 ~800 行 server.mjs + 纯前端实现了完整的 Agent 架构**：
+**Lite Claude UI 用单文件 server.mjs + 纯前端实现了完整的 Agent 架构**：
 
 - 单文件后端，零外部服务依赖
 - 直连 Anthropic API（不套 LangChain）
@@ -78,7 +78,7 @@
 | 能力 | Claude.ai | Lite Claude UI | LibreChat |
 |------|-----------|----------------|-----------|
 | Agent Loop | ✅ | ✅ | ✅ (LangChain) |
-| Web Search | ✅ | ✅ Brave + News | ✅ Multi-provider |
+| Web Search | ✅ | ✅ 5-engine Fallback | ✅ Multi-provider |
 | URL Fetch | ✅ | ✅ | ❌ |
 | Code Execution | ✅ Sandbox | ✅ JS/Python | ✅ Docker |
 | Artifacts | ✅ | ✅ HTML/MD/Code | ✅ |
@@ -87,6 +87,8 @@
 | Doc Versioning | ✅ | ✅ | ❌ |
 | Image Understanding | ✅ | ✅ | ✅ |
 | Day/Night Theme | ✅ | ✅ | ✅ |
+| SQLite Persistence | N/A | ✅ | ✅ (MongoDB) |
+| Mobile Optimized | ✅ | ✅ | ✅ |
 | Runs on 128MB VPS | N/A | ✅ | ❌ (needs 2GB+) |
 | MCP Support | ✅ | ❌ | ✅ |
 
@@ -113,6 +115,10 @@ npm start              # → http://localhost:3040
 | `ACCESS_PASSWORD` | ✅ | 登录密码 |
 | `ENABLE_WEB_SEARCH` | | `true` 启用搜索 |
 | `BRAVE_SEARCH_API_KEY` | | Brave Search Key |
+| `SERPER_API_KEY` | | [Serper.dev](https://serper.dev) Key (Google results) |
+| `TAVILY_API_KEY` | | [Tavily](https://tavily.com) Key (AI search) |
+| `GOOGLE_CSE_API_KEY` | | Google Custom Search API Key |
+| `GOOGLE_CSE_CX` | | Google CSE Engine ID |
 | `GOOGLE_CLIENT_ID` | | Google Docs 上传（可选） |
 | `GOOGLE_CLIENT_SECRET` | | Google Docs 上传（可选） |
 
@@ -132,13 +138,13 @@ npm start              # → http://localhost:3040
 └───────────────────────┼──────────────────────────────────┘
                         ▼
 ┌─────────────────────────────────────────────────────────┐
-│  server.mjs (~800 lines)                                 │
+│  server.mjs + db.mjs                                 │
 │                                                          │
 │  ┌─────────────────────────────────────────────────┐    │
-│  │  Agentic Loop (max 5 rounds)                     │    │
+│  │  Agentic Loop (max 8 rounds)                     │    │
 │  │                                                   │    │
 │  │  Tools:                                           │    │
-│  │  • web_search  (Brave API, news + web)           │    │
+│  │  • web_search  (5-engine fallback + auto-fetch)           │    │
 │  │  • fetch_url   (HTTP GET, HTML → text)           │    │
 │  │  • run_code    (JS/Python, 15s timeout)          │    │
 │  │  • create_artifact (HTML/Markdown/Code)          │    │
@@ -161,13 +167,17 @@ npm start              # → http://localhost:3040
 | 增量 DOM 更新 | 流式输出不闪烁 |
 | 文档存入对话对象内 | 自然的生命周期管理 |
 | CSS 变量 + data-theme | 一份代码两套主题 |
+| SQLite + localStorage 双层 | 服务端持久 + 前端缓存加速首屏 |
+| 5 引擎 Fallback 搜索 | 最大化免费额度，保证可用性 |
+| 搜索后自动抓取全文 | 摘要不够深，全文才能支撑深度回答 |
 
 ---
 
 ## 项目结构
 
 ```
-├── server.mjs           # 后端：Auth + Agentic Loop + Tools
+├── server.mjs           # 后端：Auth + Agentic Loop + Tools + Search
+├── db.mjs               # SQLite 存储层（用户/会话/对话/消息/文档）
 ├── public/
 │   ├── app.html         # 应用骨架
 │   ├── app.js           # 前端：SSE解析、文档管理、主题切换
@@ -201,6 +211,28 @@ ssh server 'cd /path/to/app && node server.mjs'
 
 ## 更新日志
 
+### 2026-05-07 — SQLite 存储 & 多引擎搜索 & 移动端优化
+
+**存储层升级：**
+- SQLite 持久化：用户/会话/对话/消息/文档全部服务端存储
+- Session 持久化：服务重启不丢失登录状态
+- 双层缓存架构：API 读写 + localStorage 缓存，首屏秒开
+- 自动迁移：首次登录将 localStorage 旧数据上传到 SQLite
+
+**多引擎搜索增强：**
+- 5 引擎智能 Fallback：Serper (Google) > Tavily (AI) > Google CSE > Brave > DuckDuckGo
+- 搜索后自动全文抓取 Top 3 结果（6000 字/页）
+- 中文搜索修复：移除 Brave country=cn 导致返回空的 bug
+- Agentic Loop 增强：8 轮上限，前 3 轮均可搜索
+- 系统提示重写：鼓励深入全面回答 + 主动搜索验证
+
+**移动端优化：**
+- iOS 键盘适配（visualViewport）
+- 触摸目标增大至 44px
+- 全屏文档面板 + 防缩放 + PWA 支持
+
+---
+
 ### 2026-05-07 — 长文档生成 & DOCX 导出
 
 **新增功能：**
@@ -224,7 +256,8 @@ ssh server 'cd /path/to/app && node server.mjs'
 ## Credits
 
 - Powered by [Anthropic Claude](https://www.anthropic.com)
-- Web search by [Brave Search API](https://brave.com/search/api/)
+- Web search by [Serper](https://serper.dev) + [Tavily](https://tavily.com) + [Brave](https://brave.com/search/api/) + [DuckDuckGo](https://duckduckgo.com)
+- Data storage by [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
 - Typography: [Newsreader](https://fonts.google.com/specimen/Newsreader) + [DM Sans](https://fonts.google.com/specimen/DM+Sans)
 
 ## License
