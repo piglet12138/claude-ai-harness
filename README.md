@@ -82,6 +82,8 @@
 | URL Fetch | ✅ | ✅ | ❌ |
 | Code Execution | ✅ Sandbox | ✅ JS/Python | ✅ Docker |
 | Artifacts | ✅ | ✅ HTML/MD/Code | ✅ |
+| Long Doc Generation | ✅ | ✅ Multi-agent | ❌ |
+| DOCX Export | ✅ | ✅ | ❌ |
 | Doc Versioning | ✅ | ✅ | ❌ |
 | Image Understanding | ✅ | ✅ | ✅ |
 | Day/Night Theme | ✅ | ✅ | ✅ |
@@ -140,6 +142,7 @@ npm start              # → http://localhost:3040
 │  │  • fetch_url   (HTTP GET, HTML → text)           │    │
 │  │  • run_code    (JS/Python, 15s timeout)          │    │
 │  │  • create_artifact (HTML/Markdown/Code)          │    │
+│  │  • generate_long_document (多agent并行, 50-100页)│    │
 │  └─────────────────────────────────────────────────┘    │
 │                                                          │
 │  Context Compression · Retry Logic · Stream Parsing      │
@@ -193,6 +196,28 @@ ssh server 'cd /path/to/app && node server.mjs'
 ```
 
 推荐用 `systemd` 或 `nohup` 保活。
+
+---
+
+## 更新日志
+
+### 2026-05-07 — 长文档生成 & DOCX 导出
+
+**新增功能：**
+- 🔖 **多子Agent并行长文档生成**：支持生成 50-100 页的长篇文档，采用大纲规划→参考搜索→分章并行撰写→汇编的流水线架构
+- 📥 **DOCX 导出**：一键下载 Word 文档，支持标题、段落、列表、表格等格式转换
+- 📊 **生成进度实时推送**：通过 SSE 流式推送章节生成进度，工具卡片显示详细日志
+- 🔄 **进度持久化**：刷新页面后可恢复查看生成进度状态
+
+**修复：**
+- 工具卡片流中断后仍显示加载动画 → 自动标记为完成
+- 大纲 JSON 解析增强（兼容 trailing comma、全角标点、smart quotes）
+- 子Agent移除 tools 参数，解决 LuckyAPI 兼容性问题
+
+**优化：**
+- 移除独立的"生成长文档"侧栏按钮，能力内化为 Agent 工具调用
+- 简化导出：移除冗余按钮，智能下载（文档→DOCX，HTML→原始HTML）
+- 子Agent密钥池轮询，独立于主聊天密钥
 
 ---
 
