@@ -15,10 +15,15 @@ const publicDir = path.join(root, "public");
 
 // Temporary share links (in-memory, expire after 24h)
 const shareStore = new Map();
+// Long document background jobs (in-memory, expire after 2h)
+const longDocJobs = new Map();
 setInterval(() => {
   const now = Date.now();
   for (const [id, entry] of shareStore) {
     if (now > entry.expires) shareStore.delete(id);
+  }
+  for (const [id, job] of longDocJobs) {
+    if (now - job.createdAt > 7200_000) longDocJobs.delete(id);
   }
 }, 3600_000);
 const env = await loadEnv(path.join(root, ".env"));
@@ -454,6 +459,24 @@ const server = http.createServer(async (req, res) => {
       if (!readSession(req)) return json(res, { error: "Unauthorized" }, 401);
       const body = await readJson(req, 10 * 1024 * 1024);
       return uploadGoogleDoc(res, body);
+    }
+
+    // ── Long doc job status (disconnect recovery) ──
+    if (req.method === "GET" && url.pathname.match(/^\/api\/job\/[^/]+$/)) {
+      if (!readSession(req)) return json(res, { error: "Unauthorized" }, 401);
+      const jobId = url.pathname.split("/")[3];
+      const job = longDocJobs.get(jobId);
+      if (!job) return json(res, { error: "Job not found" }, 404);
+      // Return progress since a given index (for incremental polling)
+      const since = Number(url.searchParams?.get("since") || 0);
+      return json(res, {
+        id: job.id,
+        status: job.status,
+        progress: job.progress.slice(since),
+        progressTotal: job.progress.length,
+        artifact: job.status === "completed" ? job.artifact : null,
+        error: job.error,
+      });
     }
 
     if (req.method === "POST" && url.pathname === "/api/search") {
@@ -2052,7 +2075,22 @@ async function executeGenerateLongDoc(args, res) {
   const requirements = String(args?.requirements || "").trim();
   const targetPages = Math.max(5, Math.min(120, Number(args?.pages) || 30));
 
+  // Create a background job so progress survives client disconnect
+  const jobId = crypto.randomUUID();
+  const job = {
+    id: jobId, status: "running", createdAt: Date.now(),
+    progress: [], artifact: null, result: null, error: null,
+  };
+  longDocJobs.set(jobId, job);
+
+  // Notify client of the jobId immediately
+  if (res) {
+    try { res.write(`event: longdoc_job\ndata: ${JSON.stringify({ jobId })}\n\n`); res.flush?.(); } catch {}
+  }
+
   const sendProgress = (data) => {
+    job.progress.push(data);
+    if (job.progress.length > 50) job.progress = job.progress.slice(-40);
     if (res) {
       try { res.write(`event: longdoc_progress\ndata: ${JSON.stringify(data)}\n\n`); res.flush?.(); } catch {}
     }
@@ -2136,27 +2174,35 @@ async function executeGenerateLongDoc(args, res) {
 
     sendProgress({ stage: "complete", message: `文档完成：${outline.chapters.length} 章，约 ${estimatedPages} 页` });
 
-    // Emit as artifact
+    // Store artifact in job for disconnect recovery
+    const artifactData = {
+      title: outline.title,
+      type: "document",
+      content: finalDoc,
+      language: "markdown",
+      description: `长文档 · ${outline.chapters.length}章 · ~${estimatedPages}页`,
+      file_path: "document.md",
+    };
+    job.artifact = artifactData;
+    job.status = "completed";
+    job.result = {
+      summary: `已生成「${outline.title}」(${outline.chapters.length}章, ~${estimatedPages}页)`,
+      content: `Long document "${outline.title}" generated: ${outline.chapters.length} chapters, ~${estimatedPages} pages. The document is now visible in the preview panel.`,
+    };
+
+    // Emit as artifact (may fail if client disconnected — that's OK, job has the data)
     if (res) {
       try {
-        res.write(`event: artifact\ndata: ${JSON.stringify({
-          title: outline.title,
-          type: "document",
-          content: finalDoc,
-          language: "markdown",
-          description: `长文档 · ${outline.chapters.length}章 · ~${estimatedPages}页`,
-          file_path: "document.md",
-        })}\n\n`);
+        res.write(`event: artifact\ndata: ${JSON.stringify(artifactData)}\n\n`);
         res.flush?.();
       } catch {}
     }
 
-    return {
-      summary: `已生成「${outline.title}」(${outline.chapters.length}章, ~${estimatedPages}页)`,
-      content: `Long document "${outline.title}" generated: ${outline.chapters.length} chapters, ~${estimatedPages} pages. The document is now visible in the preview panel.`,
-    };
+    return job.result;
   } catch (err) {
     console.error("[LongDoc] Error:", err);
+    job.status = "failed";
+    job.error = err.message;
     return { summary: "生成失败", content: `Long document generation failed: ${err.message}` };
   }
 }

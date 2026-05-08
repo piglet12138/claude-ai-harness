@@ -351,6 +351,8 @@ async function showChat() {
   // Migrate localStorage data to server (one-time)
   await migrateLocalToServer();
   resumePendingGoogleUpload();
+  // Resume any pending long-doc background jobs
+  resumeLongDocJobs();
 }
 
 // Save partial content if user leaves/refreshes during streaming
@@ -1555,6 +1557,15 @@ function handleSSEEvent(eventType, data, assistant, thread) {
       }
       queueStreamRender(thread, assistant);
       break;
+    case "longdoc_job": {
+      // Server assigned a background job ID — persist it for disconnect recovery
+      if (data.jobId && thread) {
+        thread._longDocJobId = data.jobId;
+        thread._longDocJobSeen = 0;
+        try { saveThreads(); } catch {}
+      }
+      break;
+    }
     case "longdoc_progress": {
       // Update the generate_long_document tool card with progress
       if (assistant.toolCalls) {
@@ -1565,6 +1576,8 @@ function handleSSEEvent(eventType, data, assistant, thread) {
           tc._progressLog = tc._progressLog || [];
           if (data.message) tc._progressLog.push(data.message);
           if (tc._progressLog.length > 20) tc._progressLog = tc._progressLog.slice(-15);
+          // Track how many progress events we've seen (for incremental polling)
+          if (thread) thread._longDocJobSeen = (thread._longDocJobSeen || 0) + 1;
           queueStreamRender(thread, assistant);
           // Save periodically so refresh shows latest state
           try { saveThreads(); } catch {}
@@ -1574,6 +1587,11 @@ function handleSSEEvent(eventType, data, assistant, thread) {
     }
     case "artifact":
       upsertArtifactFromTool(data, thread);
+      // Long doc job delivered artifact via SSE — clean up job tracking
+      if (thread._longDocJobId) {
+        delete thread._longDocJobId;
+        delete thread._longDocJobSeen;
+      }
       renderDocuments();
       renderDocumentPanel();
       break;
@@ -1586,6 +1604,101 @@ function handleSSEEvent(eventType, data, assistant, thread) {
       }
       break;
   }
+}
+
+// Resume long-doc background jobs after page refresh
+function resumeLongDocJobs() {
+  for (const thread of state.threads) {
+    if (!thread._longDocJobId) continue;
+    const jobId = thread._longDocJobId;
+    // Find the tool card that was running
+    const lastMsg = [...(thread.messages || [])].reverse().find(m => m.role === "assistant" && m.toolCalls);
+    const tc = lastMsg?.toolCalls?.find(t => t.name === "generate_long_document" && t.status === "running");
+    if (!tc) {
+      // Tool already completed or doesn't exist — clean up
+      delete thread._longDocJobId;
+      delete thread._longDocJobSeen;
+      try { saveThreads(); } catch {}
+      continue;
+    }
+    console.log(`[LongDoc] Resuming job ${jobId} for thread ${thread.id}`);
+    pollLongDocJob(thread, lastMsg, tc, jobId);
+  }
+}
+
+async function pollLongDocJob(thread, assistant, tc, jobId) {
+  const seen = thread._longDocJobSeen || 0;
+  let pollCount = 0;
+  const maxPolls = 300; // ~10 min at 2s interval
+  const interval = 2000;
+
+  const poll = async () => {
+    try {
+      const sinceIdx = (thread._longDocJobSeen || 0);
+      const res = await fetchJson(`/api/job/${jobId}?since=${sinceIdx}`);
+
+      // Apply new progress events
+      if (res.progress?.length) {
+        for (const p of res.progress) {
+          tc.summary = p.message || tc.summary;
+          tc._progressLog = tc._progressLog || [];
+          if (p.message) tc._progressLog.push(p.message);
+          if (tc._progressLog.length > 20) tc._progressLog = tc._progressLog.slice(-15);
+        }
+        thread._longDocJobSeen = res.progressTotal;
+        queueStreamRender(thread, assistant);
+        try { saveThreads(); } catch {}
+      }
+
+      if (res.status === "completed") {
+        tc.status = "completed";
+        tc.summary = res.progress?.slice(-1)?.[0]?.message || tc.summary;
+        // Apply the artifact
+        if (res.artifact) {
+          upsertArtifactFromTool(res.artifact, thread);
+          renderDocuments();
+          renderDocumentPanel();
+        }
+        // Clean up job tracking
+        delete thread._longDocJobId;
+        delete thread._longDocJobSeen;
+        queueStreamRender(thread, assistant);
+        try { saveThreads(); } catch {}
+        console.log(`[LongDoc] Job ${jobId} completed successfully`);
+        return; // stop polling
+      }
+
+      if (res.status === "failed") {
+        tc.status = "completed";
+        tc.summary = `生成失败: ${res.error || "未知错误"}`;
+        delete thread._longDocJobId;
+        delete thread._longDocJobSeen;
+        queueStreamRender(thread, assistant);
+        try { saveThreads(); } catch {}
+        console.error(`[LongDoc] Job ${jobId} failed:`, res.error);
+        return; // stop polling
+      }
+
+      // Still running — continue polling
+      pollCount++;
+      if (pollCount < maxPolls) {
+        setTimeout(poll, interval);
+      } else {
+        console.warn(`[LongDoc] Job ${jobId} polling timeout`);
+        tc.summary = "生成超时，请刷新重试";
+        tc.status = "completed";
+        delete thread._longDocJobId;
+        queueStreamRender(thread, assistant);
+        try { saveThreads(); } catch {}
+      }
+    } catch (err) {
+      console.error(`[LongDoc] Poll error for job ${jobId}:`, err.message);
+      pollCount++;
+      if (pollCount < maxPolls) setTimeout(poll, interval * 2);
+    }
+  };
+
+  poll();
 }
 
 function upsertArtifactFromTool(data, thread) {
