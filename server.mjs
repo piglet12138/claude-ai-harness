@@ -685,6 +685,7 @@ async function uploadGoogleDoc(res, body) {
 async function chat(req, res) {
   const body = await readJson(req, 50 * 1024 * 1024);
   const messages = Array.isArray(body?.messages) ? body.messages.slice(-24) : [];
+  const chatThreadId = body?.threadId || null; // for persisting artifacts to SQLite
   // Preprocess: extract text from binary file attachments (PDF, XLSX)
   for (const msg of messages) {
     if (!Array.isArray(msg.content)) continue;
@@ -788,7 +789,9 @@ async function chat(req, res) {
               console.log(`[Chat] Executing tool: ${tc.name}`);
         const toolResult = await executeTool(tc.name, tc.input, res);
               if (tc.name === "create_artifact") {
-                res.write(`event: artifact\ndata: ${JSON.stringify({ title: tc.input.title || "Artifact", type: tc.input.type || "html", content: tc.input.content || "", language: tc.input.language || "", description: tc.input.description || "", file_path: tc.input.file_path || "" })}\n\n`);
+                const artifactDoc = { title: tc.input.title || "Artifact", type: tc.input.type || "html", content: tc.input.content || "", language: tc.input.language || "", description: tc.input.description || "", file_path: tc.input.file_path || "" };
+                if (chatThreadId) { try { dbDocuments.upsert(chatThreadId, { id: crypto.randomUUID(), ...artifactDoc }); } catch {} }
+                try { res.write(`event: artifact\ndata: ${JSON.stringify(artifactDoc)}\n\n`); } catch {}
               }
               res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary, sources: toolResult.sources || undefined })}\n\n`);
               res.flush?.();
@@ -834,15 +837,25 @@ async function chat(req, res) {
 
         if (tc.name === "create_artifact") {
           hasArtifact = true;
-          res.write(`event: artifact\ndata: ${JSON.stringify({
+          const artifactDoc = {
             title: tc.input.title || "Artifact",
             type: tc.input.type || "html",
             content: tc.input.content || "",
             language: tc.input.language || "",
             description: tc.input.description || "",
             file_path: tc.input.file_path || "",
-          })}\n\n`);
-          res.flush?.();
+          };
+          // Persist to SQLite immediately (survives client disconnect)
+          if (chatThreadId) {
+            try {
+              const docId = crypto.randomUUID();
+              dbDocuments.upsert(chatThreadId, { id: docId, ...artifactDoc });
+            } catch (e) { console.error("[Chat] Failed to persist artifact:", e.message); }
+          }
+          try {
+            res.write(`event: artifact\ndata: ${JSON.stringify(artifactDoc)}\n\n`);
+            res.flush?.();
+          } catch {}
         }
 
         res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary, sources: toolResult.sources || undefined, codeResult: toolResult.codeResult || undefined })}\n\n`);

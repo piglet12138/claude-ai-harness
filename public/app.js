@@ -351,6 +351,8 @@ async function showChat() {
   // Migrate localStorage data to server (one-time)
   await migrateLocalToServer();
   resumePendingGoogleUpload();
+  // Fix stuck "running" tool cards from interrupted streams
+  fixStuckToolCards();
   // Resume any pending long-doc background jobs
   resumeLongDocJobs();
 }
@@ -1025,7 +1027,7 @@ function regenerateLastMessage() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: messagesForApi(thread, apiContent) }),
+        body: JSON.stringify({ messages: messagesForApi(thread, apiContent), threadId: thread.id }),
         signal: state.abortController.signal,
       });
       if (!response.ok || !response.body) throw new Error(await response.text());
@@ -1458,7 +1460,7 @@ async function send(event) {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ messages: messagesForApi(thread, apiContent) }),
+      body: JSON.stringify({ messages: messagesForApi(thread, apiContent), threadId: thread.id }),
       signal: state.abortController.signal,
     });
     if (!response.ok || !response.body) throw new Error(await response.text());
@@ -1604,6 +1606,26 @@ function handleSSEEvent(eventType, data, assistant, thread) {
       }
       break;
   }
+}
+
+// Fix tool cards stuck in "running" state after page refresh (stream was interrupted)
+function fixStuckToolCards() {
+  if (state.streaming) return; // don't touch if actively streaming
+  for (const thread of state.threads) {
+    for (const msg of (thread.messages || [])) {
+      if (msg.role !== "assistant" || !msg.toolCalls) continue;
+      for (const tc of msg.toolCalls) {
+        // Skip long-doc jobs — those have their own recovery via polling
+        if (tc.name === "generate_long_document" && thread._longDocJobId) continue;
+        if (tc.status === "running") {
+          tc.status = "completed";
+          tc.summary = tc.summary || "已中断（页面刷新）";
+          console.log(`[Recovery] Marked stuck tool card as completed: ${tc.name}`);
+        }
+      }
+    }
+  }
+  try { saveThreads(); } catch {}
 }
 
 // Resume long-doc background jobs after page refresh
