@@ -7,6 +7,7 @@
 [![Live Demo](https://img.shields.io/badge/Demo-claude.yaoyuheng2001.me-blue?style=flat-square)](https://claude.yaoyuheng2001.me)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22+-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
+[![Blog](https://img.shields.io/badge/Blog-掘金-1e80ff?style=flat-square)](https://juejin.cn/post/7637353693051781166)
 
 <br>
 
@@ -14,7 +15,7 @@
 
 <br>
 
-<img src="./docs/preview-light.png" alt="Light Theme" width="800">
+<img src="./docs/1.png" alt="主界面" width="800">
 
 </div>
 
@@ -49,6 +50,14 @@
        └─ 不需要工具  → 直接回答
 ```
 
+**搜索 + 深度阅读：** 模型自主搜索多个角度，自动读取全文后回答
+
+<img src="./docs/2.png" alt="Agent 搜索 + 深度阅读" width="700">
+
+**搜索 + 代码执行 + 可视化：** 搜索真实数据 → 尝试 Python → 自动切换 Chart.js 方案
+
+<img src="./docs/3.png" alt="代码执行 + 可视化" width="700">
+
 <img src="./docs/code-exec.png" alt="Code Interpreter & Tool Cards" width="600">
 
 ### 日/夜双主题
@@ -59,11 +68,25 @@
 |-------|------|
 | <img src="./docs/theme-light.png" width="380"> | <img src="./docs/theme-dark.png" width="380"> |
 
+### 交互式选项 & 文档生成
+
+模型主动提问明确需求，用户点选后生成高质量文档：
+
+<img src="./docs/4.png" alt="先问再写 + 文档生成" width="700">
+
+<img src="./docs/5.png" alt="交互式选项" width="500">
+
 ### 对话级文档管理
 
 每个对话拥有独立的文档空间，多文档 tab 切换，版本历史可回退：
 
 <img src="./docs/doc-panel.png" alt="Document panel with tabs" width="600">
+
+### 长文档并行生成
+
+多个子 Agent 并行撰写各章节，支持 50-100 页长篇文档，可预览和导出 DOCX：
+
+<img src="./docs/6.png" alt="61 页白皮书生成" width="700">
 
 ### Code Interpreter
 
@@ -304,6 +327,10 @@ ssh server 'cd /path/to/app && node server.mjs'
 - 子Agent密钥池轮询，独立于主聊天密钥
 
 ---
+
+## Blog
+
+- [自己写了一个 Claude Agent 前端之后，对 Agent 的一些想法](https://juejin.cn/post/7637353693051781166) — 掘金
 
 ## Credits
 
