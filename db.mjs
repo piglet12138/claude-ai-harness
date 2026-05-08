@@ -74,6 +74,16 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_documents_thread ON documents(thread_id);
+
+  CREATE TABLE IF NOT EXISTS usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    model TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_usage_user ON usage(user_id, created_at);
 `);
 
 // ---------------------------------------------------------------------------
@@ -119,6 +129,15 @@ const stmts = {
     ON CONFLICT(id) DO UPDATE SET title=excluded.title, type=excluded.type, content=excluded.content,
     language=excluded.language, description=excluded.description, versions=excluded.versions, updated_at=datetime('now')`),
   deleteDocument: db.prepare("DELETE FROM documents WHERE id = ?"),
+
+  // Usage
+  recordUsage: db.prepare("INSERT INTO usage (user_id, input_tokens, output_tokens, model) VALUES (?, ?, ?, ?)"),
+  userUsageToday: db.prepare("SELECT COALESCE(SUM(input_tokens),0) as input_tokens, COALESCE(SUM(output_tokens),0) as output_tokens, COUNT(*) as requests FROM usage WHERE user_id = ? AND created_at >= date('now')"),
+  userUsageAll: db.prepare("SELECT COALESCE(SUM(input_tokens),0) as input_tokens, COALESCE(SUM(output_tokens),0) as output_tokens, COUNT(*) as requests FROM usage WHERE user_id = ?"),
+  allUsageSummary: db.prepare(`SELECT u.user_id, us.email, COALESCE(SUM(u.input_tokens),0) as input_tokens, COALESCE(SUM(u.output_tokens),0) as output_tokens, COUNT(*) as requests, MAX(u.created_at) as last_active
+    FROM usage u LEFT JOIN users us ON u.user_id = us.id GROUP BY u.user_id ORDER BY input_tokens + output_tokens DESC`),
+  userUsageDaily: db.prepare(`SELECT date(created_at) as day, SUM(input_tokens) as input_tokens, SUM(output_tokens) as output_tokens, COUNT(*) as requests
+    FROM usage WHERE user_id = ? GROUP BY date(created_at) ORDER BY day DESC LIMIT 30`),
 };
 
 // ---------------------------------------------------------------------------
@@ -212,6 +231,16 @@ export const dbDocuments = {
     );
   },
   delete(id) { stmts.deleteDocument.run(id); },
+};
+
+export const dbUsage = {
+  record(userId, inputTokens, outputTokens, model) {
+    stmts.recordUsage.run(userId, inputTokens, outputTokens, model || "");
+  },
+  userToday(userId) { return stmts.userUsageToday.get(userId); },
+  userAll(userId) { return stmts.userUsageAll.get(userId); },
+  userDaily(userId) { return stmts.userUsageDaily.all(userId); },
+  allSummary() { return stmts.allUsageSummary.all(); },
 };
 
 // Bulk import (for migration from localStorage)

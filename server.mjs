@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
-import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport } from "./db.mjs";
+import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage } from "./db.mjs";
 const XLSX = require("xlsx");
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TableRow, TableCell, Table, WidthType, BorderStyle, PageBreak } = require("docx");
 
@@ -511,6 +511,22 @@ const server = http.createServer(async (req, res) => {
       return json(res, { ok: true });
     }
 
+    // Usage stats — user sees own, admin sees all
+    if (req.method === "GET" && url.pathname === "/api/usage") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const today = dbUsage.userToday(session.userId);
+      const total = dbUsage.userAll(session.userId);
+      const daily = dbUsage.userDaily(session.userId);
+      return json(res, { today, total, daily });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/usage") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      return json(res, dbUsage.allSummary());
+    }
+
     if (req.method === "GET" && url.pathname === "/api/admin/bug-reports") {
       const session = readSession(req);
       if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
@@ -613,6 +629,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/app") {
       return staticFile("/app.html", res);
+    }
+
+    if (req.method === "GET" && url.pathname === "/admin") {
+      return staticFile("/admin.html", res);
     }
 
     // Serve bug report images (admin only in practice, but images are random-named)
@@ -822,6 +842,7 @@ async function chat(req, res) {
   const MAX_ROUNDS = 8;
 
   const TOKEN_BUDGET = 80000; // Conservative budget to leave room for response
+  let totalInputTokens = 0, totalOutputTokens = 0;
 
   try {
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -907,7 +928,9 @@ async function chat(req, res) {
       result.stopReason = result.toolUseBlocks?.length ? "tool_use" : "end_turn";
       console.log(`[Chat] Round ${round}: stopReason was empty, inferred as ${result.stopReason}`);
     }
-    console.log(`[Chat] Round ${round}: stream consumed, stopReason=${result.stopReason}, toolUse=${result.toolUseBlocks?.length || 0}`);
+    totalInputTokens += result.inputTokens || 0;
+    totalOutputTokens += result.outputTokens || 0;
+    console.log(`[Chat] Round ${round}: stream consumed, stopReason=${result.stopReason}, toolUse=${result.toolUseBlocks?.length || 0}, tokens: +${result.inputTokens}/${result.outputTokens}`);
 
     if (result.stopReason === "tool_use" && result.toolUseBlocks.length) {
       const allSearches = result.toolUseBlocks.every((t) => t.name === "web_search");
@@ -1019,6 +1042,16 @@ async function chat(req, res) {
       res.write(`data: ${JSON.stringify({ delta: `\n\n---\n请求出错：${String(loopErr.message).slice(0, 200)}` })}\n\n`);
     } catch {}
   }
+  // Record usage
+  if (totalInputTokens || totalOutputTokens) {
+    const session = readSession(req);
+    if (session) {
+      try {
+        dbUsage.record(session.userId, totalInputTokens, totalOutputTokens, model);
+      } catch (e) { console.error("[Usage] Failed to record:", e.message); }
+    }
+    console.log(`[Chat] Total tokens: input=${totalInputTokens}, output=${totalOutputTokens}`);
+  }
   try {
     res.write("event: done\ndata: {}\n\n");
     res.end();
@@ -1085,6 +1118,7 @@ async function consumeAnthropicStream(body, res) {
   const allBlocks = [];     // complete content blocks for context
   let currentBlock = null;
   let stopReason = "";
+  let inputTokens = 0, outputTokens = 0;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -1137,8 +1171,13 @@ async function consumeAnthropicStream(body, res) {
             }
             break;
 
+          case "message_start":
+            if (data.message?.usage) inputTokens += data.message.usage.input_tokens || 0;
+            break;
+
           case "message_delta":
             if (data.delta?.stop_reason) stopReason = data.delta.stop_reason;
+            if (data.usage?.output_tokens) outputTokens = data.usage.output_tokens;
             break;
         }
       } catch {
@@ -1156,6 +1195,8 @@ async function consumeAnthropicStream(body, res) {
     }),
     toolUseBlocks: allBlocks.filter((b) => b.type === "tool_use"),
     stopReason,
+    inputTokens,
+    outputTokens,
   };
 }
 

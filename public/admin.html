@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理后台 — Claude Lite</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f3ef; color: #2a2118; min-height: 100vh; }
+.container { max-width: 900px; margin: 0 auto; padding: 32px 20px; }
+header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; }
+h1 { font-size: 22px; font-weight: 600; }
+.back { color: #6d6054; text-decoration: none; font-size: 14px; }
+.back:hover { color: #c05a32; }
+
+/* Tabs */
+.tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid #e0dbd4; }
+.tab { padding: 10px 20px; border: none; background: none; font-size: 14px; color: #6d6054; cursor: pointer; border-bottom: 2px solid transparent; }
+.tab.active { color: #c05a32; border-bottom-color: #c05a32; font-weight: 600; }
+
+/* Section */
+.section { display: none; }
+.section.active { display: block; }
+
+/* Table */
+table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #f0ebe4; font-size: 14px; }
+th { background: #faf8f5; color: #6d6054; font-weight: 600; font-size: 13px; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #fdfcfa; }
+
+/* Badges */
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+.badge-admin { background: #fef3cd; color: #856404; }
+.badge-user { background: #e8f4e8; color: #2d6a2d; }
+
+/* Buttons */
+.btn { padding: 6px 14px; border: 1px solid #e0dbd4; border-radius: 6px; background: #fff; color: #2a2118; font-size: 13px; cursor: pointer; }
+.btn:hover { background: #f5f3ef; }
+.btn-danger { color: #dc3545; border-color: #dc3545; }
+.btn-danger:hover { background: #dc3545; color: #fff; }
+.btn-primary { background: #c05a32; color: #fff; border-color: #c05a32; }
+.btn-primary:hover { background: #a84d2a; }
+.actions { display: flex; gap: 6px; }
+
+/* Form */
+.form-row { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+.form-row input, .form-row select { padding: 8px 12px; border: 1px solid #e0dbd4; border-radius: 6px; font-size: 14px; }
+.form-row input { flex: 1; min-width: 150px; }
+
+/* Bug reports */
+.report-card { background: #fff; padding: 16px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #f0ebe4; }
+.report-meta { font-size: 12px; color: #6d6054; margin-bottom: 8px; }
+.report-text { font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+
+.empty { text-align: center; padding: 40px; color: #9c9083; }
+.toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; background: #2d6a2d; color: #fff; border-radius: 8px; font-size: 14px; z-index: 100; display: none; }
+.toast.error { background: #dc3545; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>管理后台</h1>
+    <a href="/app" class="back">← 返回应用</a>
+  </header>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="users">用户管理</button>
+    <button class="tab" data-tab="usage">用量统计</button>
+    <button class="tab" data-tab="bugs">Bug 反馈</button>
+  </div>
+
+  <!-- Users Section -->
+  <div class="section active" id="sec-users">
+    <div class="form-row">
+      <input type="email" id="newEmail" placeholder="邮箱">
+      <input type="password" id="newPassword" placeholder="密码">
+      <select id="newRole"><option value="user">普通用户</option><option value="admin">管理员</option></select>
+      <button class="btn btn-primary" onclick="createUser()">添加用户</button>
+    </div>
+    <table>
+      <thead><tr><th>邮箱</th><th>角色</th><th>注册时间</th><th>操作</th></tr></thead>
+      <tbody id="userTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Usage Section -->
+  <div class="section" id="sec-usage">
+    <table>
+      <thead><tr><th>用户</th><th>总请求</th><th>输入 Token</th><th>输出 Token</th><th>最后活跃</th></tr></thead>
+      <tbody id="usageTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Bugs Section -->
+  <div class="section" id="sec-bugs">
+    <div id="bugList"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+
+// Tabs
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    tab.classList.add('active');
+    $('#sec-' + tab.dataset.tab).classList.add('active');
+  });
+});
+
+function toast(msg, error) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast' + (error ? ' error' : '');
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 2500);
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', ...opts.headers } });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || 'Error');
+  return d;
+}
+
+// ── Users ──
+async function loadUsers() {
+  try {
+    const users = await api('/api/admin/users');
+    const tbody = $('#userTable');
+    tbody.innerHTML = users.map(u => `
+      <tr>
+        <td>${esc(u.email)}</td>
+        <td><span class="badge badge-${u.role}">${u.role}</span></td>
+        <td>${u.created_at || '-'}</td>
+        <td class="actions">
+          <button class="btn" onclick="toggleRole('${u.id}', '${u.role}')">${u.role === 'admin' ? '降为用户' : '升为管理员'}</button>
+          <button class="btn" onclick="resetPwd('${u.id}', '${esc(u.email)}')">重置密码</button>
+          <button class="btn btn-danger" onclick="deleteUser('${u.id}', '${esc(u.email)}')">删除</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    if (e.message === 'Forbidden') { document.body.innerHTML = '<div style="text-align:center;padding:100px;color:#6d6054"><h2>无权访问</h2><p>需要管理员权限</p><br><a href="/app">返回应用</a></div>'; }
+  }
+}
+
+async function createUser() {
+  const email = $('#newEmail').value.trim();
+  const password = $('#newPassword').value;
+  const role = $('#newRole').value;
+  if (!email || !password) return toast('请填写邮箱和密码', true);
+  try {
+    await api('/api/admin/users', { method: 'POST', body: JSON.stringify({ email, password, role }) });
+    toast('用户已创建');
+    $('#newEmail').value = ''; $('#newPassword').value = '';
+    loadUsers();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function deleteUser(id, email) {
+  if (!confirm('确定删除用户 ' + email + '？')) return;
+  try { await api('/api/admin/users/' + id, { method: 'DELETE' }); toast('已删除'); loadUsers(); }
+  catch (e) { toast(e.message, true); }
+}
+
+async function toggleRole(id, currentRole) {
+  const newRole = currentRole === 'admin' ? 'user' : 'admin';
+  try { await api('/api/admin/users/' + id, { method: 'PATCH', body: JSON.stringify({ role: newRole }) }); toast('角色已更新'); loadUsers(); }
+  catch (e) { toast(e.message, true); }
+}
+
+async function resetPwd(id, email) {
+  const pwd = prompt('为 ' + email + ' 设置新密码：');
+  if (!pwd) return;
+  try { await api('/api/admin/users/' + id, { method: 'PATCH', body: JSON.stringify({ password: pwd }) }); toast('密码已重置'); }
+  catch (e) { toast(e.message, true); }
+}
+
+// ── Usage Stats ──
+async function loadUsage() {
+  try {
+    const data = await api('/api/admin/usage');
+    const tbody = $('#usageTable');
+    if (!data.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无数据</td></tr>'; return; }
+    const fmt = n => n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(1) + 'K' : n;
+    tbody.innerHTML = data.map(u => `
+      <tr>
+        <td>${esc(u.email || u.user_id)}</td>
+        <td>${u.requests}</td>
+        <td>${fmt(u.input_tokens)}</td>
+        <td>${fmt(u.output_tokens)}</td>
+        <td>${u.last_active || '-'}</td>
+      </tr>
+    `).join('');
+  } catch (e) { console.warn(e); }
+}
+
+// ── Bug Reports ──
+async function loadBugs() {
+  try {
+    const bugs = await api('/api/admin/bug-reports');
+    const list = $('#bugList');
+    if (!bugs.length) { list.innerHTML = '<div class="empty">暂无反馈</div>'; return; }
+    list.innerHTML = bugs.map(b => `
+      <div class="report-card">
+        <div class="report-meta">${esc(b.email)} · ${b.createdAt}</div>
+        <div class="report-text">${esc(b.text || '')}</div>
+        ${(b.images||[]).length ? '<div class="report-images">' + b.images.map(src => '<img src="' + esc(src) + '" style="max-width:200px;border-radius:6px;margin:6px 4px 0 0;cursor:pointer" onclick="window.open(this.src)">').join('') + '</div>' : ''}
+      </div>
+    `).join('');
+  } catch (e) { console.warn(e); }
+}
+
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// Init
+loadUsers();
+loadUsage();
+loadBugs();
+</script>
+</body>
+</html>
