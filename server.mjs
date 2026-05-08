@@ -1697,7 +1697,7 @@ async function executeCode(language, code) {
   // For Python: auto-inject Agg backend and auto-save any open figures
   let finalCode = code;
   if (language === "python") {
-    const preamble = `import matplotlib\nmatplotlib.use("Agg")\n`;
+    const preamble = `import matplotlib\nmatplotlib.use("Agg")\nimport matplotlib.font_manager as _fm\nfor _p in ["/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"]:\n    try: _fm.fontManager.addfont(_p)\n    except: pass\nmatplotlib.rcParams["font.sans-serif"] = ["WenQuanYi Zen Hei", "Noto Sans CJK JP"] + matplotlib.rcParams["font.sans-serif"]\nmatplotlib.rcParams["axes.unicode_minus"] = False\n`;
     const postamble = `\n\n# Auto-save open matplotlib figures\ntry:\n    import matplotlib.pyplot as _plt\n    for _i, _fig in enumerate(_plt.get_fignums()):\n        _plt.figure(_fig).savefig(f"${workDir}/figure_{_i}.png", dpi=150, bbox_inches="tight")\nexcept Exception:\n    pass\n`;
     finalCode = preamble + code + postamble;
   }
