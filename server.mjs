@@ -457,13 +457,27 @@ const server = http.createServer(async (req, res) => {
         if (req.method === "POST" && url.pathname === "/api/bug-report") {
       const session = readSession(req);
       if (!session) return json(res, { error: "Unauthorized" }, 401);
-      const body = await readJson(req, 64 * 1024);
+      const body = await readJson(req, 10 * 1024 * 1024); // 10MB for images
       const text = String(body?.text || "").trim().slice(0, 2000);
-      if (!text) return json(res, { error: "内容不能为空" }, 400);
+      const rawImages = Array.isArray(body?.images) ? body.images.slice(0, 5) : [];
+      if (!text && !rawImages.length) return json(res, { error: "内容不能为空" }, 400);
+      // Save images to disk, store paths in report
+      const imgDir = path.join(root, "bug-images");
+      await fs.mkdir(imgDir, { recursive: true });
+      const imagePaths = [];
+      for (const dataUrl of rawImages) {
+        if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) continue;
+        const match = dataUrl.match(/^data:image\/(\w+);base64,(.+)$/);
+        if (!match) continue;
+        const ext = match[1] === "jpeg" ? "jpg" : match[1];
+        const fname = `${crypto.randomBytes(8).toString("hex")}.${ext}`;
+        await fs.writeFile(path.join(imgDir, fname), Buffer.from(match[2], "base64"));
+        imagePaths.push(`/bug-images/${fname}`);
+      }
       const reportsFile = path.join(root, "bug-reports.json");
       let reports = [];
       try { reports = JSON.parse(await fs.readFile(reportsFile, "utf8")); } catch {}
-      reports.push({ id: crypto.randomUUID(), email: session.email, text, userAgent: String(req.headers["user-agent"] || "").slice(0, 200), createdAt: new Date().toISOString() });
+      reports.push({ id: crypto.randomUUID(), email: session.email, text, images: imagePaths, userAgent: String(req.headers["user-agent"] || "").slice(0, 200), createdAt: new Date().toISOString() });
       await fs.writeFile(reportsFile, JSON.stringify(reports, null, 2), "utf8");
       return json(res, { ok: true });
     }
@@ -570,6 +584,19 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/app") {
       return staticFile("/app.html", res);
+    }
+
+    // Serve bug report images (admin only in practice, but images are random-named)
+    if (req.method === "GET" && url.pathname.startsWith("/bug-images/")) {
+      const fname = path.basename(url.pathname);
+      const imgPath = path.join(root, "bug-images", fname);
+      try {
+        const data = await fs.readFile(imgPath);
+        const ext = path.extname(fname);
+        res.writeHead(200, { "content-type": mime[ext] || "image/png", "cache-control": "public, max-age=86400" });
+        res.end(data);
+        return;
+      } catch { return notFound(res); }
     }
 
     return staticFile(url.pathname, res);

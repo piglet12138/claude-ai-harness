@@ -266,6 +266,7 @@ function showLoginForm() {
 
 function showBugReportModal() {
   document.querySelector(".bug-modal")?.remove();
+  const bugImages = []; // base64 strings
   const modal = document.createElement("div");
   modal.className = "bug-modal";
   modal.innerHTML = `
@@ -273,7 +274,15 @@ function showBugReportModal() {
     <div class="bug-modal-card">
       <h3>反馈问题</h3>
       <p>描述你遇到的问题或建议：</p>
-      <textarea id="bugText" rows="5" placeholder="比如：上传图片后无法识别内容..."></textarea>
+      <textarea id="bugText" rows="5" placeholder="比如：上传图片后无法识别内容...&#10;&#10;可以直接粘贴截图 (Ctrl+V)"></textarea>
+      <div class="bug-images"></div>
+      <div class="bug-upload-row">
+        <label class="bug-upload-btn">
+          <input type="file" accept="image/*" multiple style="display:none" />
+          添加截图
+        </label>
+        <span class="bug-upload-hint">支持粘贴、拖拽或点击上传</span>
+      </div>
       <div class="bug-modal-actions">
         <button class="bug-cancel">取消</button>
         <button class="bug-submit">提交</button>
@@ -281,16 +290,80 @@ function showBugReportModal() {
       <div class="bug-msg"></div>
     </div>`;
   document.body.append(modal);
+
+  const imagesDiv = modal.querySelector(".bug-images");
+  const textarea = modal.querySelector("#bugText");
+
+  function addImage(dataUrl) {
+    if (bugImages.length >= 5) return; // max 5 images
+    bugImages.push(dataUrl);
+    renderBugImages();
+  }
+
+  function renderBugImages() {
+    imagesDiv.innerHTML = "";
+    bugImages.forEach((src, i) => {
+      const wrap = document.createElement("div");
+      wrap.className = "bug-image-thumb";
+      wrap.innerHTML = `<img src="${src}" /><span class="bug-image-remove" data-idx="${i}">&times;</span>`;
+      imagesDiv.append(wrap);
+    });
+    imagesDiv.querySelectorAll(".bug-image-remove").forEach(btn => {
+      btn.addEventListener("click", () => { bugImages.splice(Number(btn.dataset.idx), 1); renderBugImages(); });
+    });
+  }
+
+  function fileToDataUrl(file) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // File input
+  modal.querySelector('input[type="file"]').addEventListener("change", async (e) => {
+    for (const file of e.target.files) {
+      if (!file.type.startsWith("image/")) continue;
+      addImage(await fileToDataUrl(file));
+    }
+    e.target.value = "";
+  });
+
+  // Paste
+  textarea.addEventListener("paste", async (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) addImage(await fileToDataUrl(file));
+      }
+    }
+  });
+
+  // Drag & drop
+  const card = modal.querySelector(".bug-modal-card");
+  card.addEventListener("dragover", (e) => { e.preventDefault(); card.classList.add("drag-over"); });
+  card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+  card.addEventListener("drop", async (e) => {
+    e.preventDefault(); card.classList.remove("drag-over");
+    for (const file of e.dataTransfer.files) {
+      if (file.type.startsWith("image/")) addImage(await fileToDataUrl(file));
+    }
+  });
+
   modal.querySelector(".bug-cancel").addEventListener("click", () => modal.remove());
   modal.querySelector(".bug-modal-backdrop").addEventListener("click", () => modal.remove());
   modal.querySelector(".bug-submit").addEventListener("click", async () => {
     const text = modal.querySelector("#bugText").value.trim();
     const msg = modal.querySelector(".bug-msg");
-    if (!text) { msg.textContent = "请填写内容"; msg.style.color = "var(--accent)"; return; }
+    if (!text && !bugImages.length) { msg.textContent = "请填写内容或添加截图"; msg.style.color = "var(--accent)"; return; }
     modal.querySelector(".bug-submit").disabled = true;
     modal.querySelector(".bug-submit").textContent = "提交中...";
     try {
-      const resp = await fetch("/api/bug-report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+      const resp = await fetch("/api/bug-report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, images: bugImages }) });
       if (!resp.ok) throw new Error((await resp.json()).error || "提交失败");
       msg.textContent = "感谢反馈！";
       msg.style.color = "#4d9950";
