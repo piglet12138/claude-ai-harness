@@ -23,11 +23,11 @@ setInterval(() => {
 }, 3600_000);
 const env = await loadEnv(path.join(root, ".env"));
 const port = Number(env.PORT || process.env.PORT || 3040);
-const baseUrl = process.env.LUCKY_BASE_URL || env.LUCKY_BASE_URL || "https://luckyapi.chat/v1";
-const apiKey = process.env.LUCKY_API_KEY || env.LUCKY_API_KEY;
+const baseUrl = process.env.ANTHROPIC_BASE_URL || env.ANTHROPIC_BASE_URL || "https://api.anthropic.com/v1";
+const apiKey = process.env.ANTHROPIC_API_KEY || env.ANTHROPIC_API_KEY;
 const model = process.env.MODEL || env.MODEL || "claude-opus-4-7";
-const accessEmail = process.env.ACCESS_EMAIL || env.ACCESS_EMAIL || "i@i.io";
-const accessPassword = process.env.ACCESS_PASSWORD || env.ACCESS_PASSWORD || "iiiiiiii";
+const accessEmail = process.env.ACCESS_EMAIL || env.ACCESS_EMAIL;
+const accessPassword = process.env.ACCESS_PASSWORD || env.ACCESS_PASSWORD;
 const sessionSecret = process.env.SESSION_SECRET || env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 const braveApiKey = process.env.BRAVE_SEARCH_API_KEY || env.BRAVE_SEARCH_API_KEY;
 const serperApiKey = process.env.SERPER_API_KEY || env.SERPER_API_KEY || "";
@@ -193,7 +193,10 @@ function nextSubAgentKey() {
 }
 
 if (!apiKey) {
-  throw new Error("LUCKY_API_KEY is required");
+  throw new Error("ANTHROPIC_API_KEY is required. Set it in .env or as an environment variable.");
+}
+if (!accessEmail || !accessPassword) {
+  throw new Error("ACCESS_EMAIL and ACCESS_PASSWORD are required. Set them in .env or as environment variables.");
 }
 
 // ---------------------------------------------------------------------------

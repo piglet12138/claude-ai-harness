@@ -112,8 +112,8 @@ npm start              # → http://localhost:3040
 
 | 变量 | 必须 | 说明 |
 |------|------|------|
-| `LUCKY_BASE_URL` | ✅ | Anthropic API base URL |
-| `LUCKY_API_KEY` | ✅ | API Key |
+| `ANTHROPIC_BASE_URL` | ✅ | API base URL（默认 `https://api.anthropic.com/v1`） |
+| `ANTHROPIC_API_KEY` | ✅ | Anthropic API Key |
 | `MODEL` | | 模型名（默认 claude-opus-4-7） |
 | `ACCESS_EMAIL` | ✅ | 登录账号 |
 | `ACCESS_PASSWORD` | ✅ | 登录密码 |
