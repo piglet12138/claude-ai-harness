@@ -48,6 +48,30 @@ const googleRedirectUri = process.env.GOOGLE_REDIRECT_URI || env.GOOGLE_REDIRECT
 const googleTokenFile = path.resolve(root, process.env.GOOGLE_TOKEN_FILE || env.GOOGLE_TOKEN_FILE || ".google-token.json");
 const googleScopes = ["https://www.googleapis.com/auth/drive.file"];
 const googleOauthStates = new Map();
+
+// Email notifications via Resend (for bug reports)
+const resendApiKey = process.env.RESEND_API_KEY || env.RESEND_API_KEY || "";
+const notifyEmails = (process.env.NOTIFY_EMAILS || env.NOTIFY_EMAILS || "").split(",").map(s => s.trim()).filter(Boolean);
+
+async function sendNotifyEmail(subject, text) {
+  if (!resendApiKey || !notifyEmails.length) return;
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${resendApiKey}` },
+      body: JSON.stringify({
+        from: "Claude Lite <noreply@yaoyuheng2001.me>",
+        to: notifyEmails,
+        subject,
+        text,
+      }),
+    });
+    const data = await resp.json();
+    console.log(`[Email] ${resp.ok ? "Sent" : "Failed"}: ${subject}`, resp.ok ? "" : JSON.stringify(data));
+  } catch (e) {
+    console.error("[Email] Error:", e.message);
+  }
+}
 // Global crash protection
 process.on("uncaughtException", (err) => {
   console.error("[FATAL] Uncaught exception:", err.message, err.stack?.split("\n").slice(0, 3).join("\n"));
@@ -479,6 +503,11 @@ const server = http.createServer(async (req, res) => {
       try { reports = JSON.parse(await fs.readFile(reportsFile, "utf8")); } catch {}
       reports.push({ id: crypto.randomUUID(), email: session.email, text, images: imagePaths, userAgent: String(req.headers["user-agent"] || "").slice(0, 200), createdAt: new Date().toISOString() });
       await fs.writeFile(reportsFile, JSON.stringify(reports, null, 2), "utf8");
+      // Send email notification (non-blocking)
+      sendNotifyEmail(
+        `[Bug Report] ${text.slice(0, 50)}`,
+        `From: ${session.email}\n\n${text}${imagePaths.length ? `\n\n[${imagePaths.length} 张截图]` : ""}`
+      ).catch(() => {});
       return json(res, { ok: true });
     }
 
@@ -1698,7 +1727,7 @@ async function executeCode(language, code) {
   let finalCode = code;
   if (language === "python") {
     const preamble = `import matplotlib\nmatplotlib.use("Agg")\nimport matplotlib.font_manager as _fm\nfor _p in ["/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"]:\n    try: _fm.fontManager.addfont(_p)\n    except: pass\nmatplotlib.rcParams["font.sans-serif"] = ["WenQuanYi Zen Hei", "Noto Sans CJK JP"] + matplotlib.rcParams["font.sans-serif"]\nmatplotlib.rcParams["axes.unicode_minus"] = False\n`;
-    const postamble = `\n\n# Auto-save open matplotlib figures\ntry:\n    import matplotlib.pyplot as _plt\n    for _i, _fig in enumerate(_plt.get_fignums()):\n        _plt.figure(_fig).savefig(f"${workDir}/figure_{_i}.png", dpi=150, bbox_inches="tight")\nexcept Exception:\n    pass\n`;
+    const postamble = `\n\n# Auto-save open matplotlib figures (skip if user already saved images)\ntry:\n    import os as _os, matplotlib.pyplot as _plt\n    _has_images = any(f.endswith((".png",".jpg",".jpeg",".svg")) for f in _os.listdir("."))\n    if not _has_images and _plt.get_fignums():\n        for _i, _fig in enumerate(_plt.get_fignums()):\n            _plt.figure(_fig).savefig(f"${workDir}/figure_{_i}.png", dpi=150, bbox_inches="tight")\nexcept Exception:\n    pass\n`;
     finalCode = preamble + code + postamble;
   }
 
