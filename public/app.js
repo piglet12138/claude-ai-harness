@@ -307,6 +307,11 @@ function showBugReportModal() {
 async function logout() {
   await fetch("/api/logout", { method: "POST" });
   state.authenticated = false;
+  // Clear local data so next login starts fresh
+  state.threads = [];
+  state.activeId = "";
+  state.activeDocId = "";
+  try { saveThreads(); } catch {}
   showLogin();
 }
 
@@ -322,22 +327,24 @@ async function showChat() {
   // Load threads from server (SQLite)
   try {
     const serverThreads = await fetchJson("/api/threads");
-    if (serverThreads.length) {
-      // Merge: server is source of truth for metadata, keep local messages as cache
-      const localMap = new Map(state.threads.map(t => [t.id, t]));
-      state.threads = serverThreads.map(t => {
-        const local = localMap.get(t.id);
-        return {
-          id: t.id,
-          title: t.title,
-          archived: !!t.archived,
-          createdAt: t.created_at,
-          updatedAt: t.updated_at,
-          messages: local?.messages || [], // lazy-loaded
-          documents: local?.documents || [],
-          _loaded: local?._loaded || false,
-        };
-      });
+    // Server is source of truth — replace local threads with server data
+    const localMap = new Map(state.threads.map(t => [t.id, t]));
+    state.threads = serverThreads.map(t => {
+      const local = localMap.get(t.id);
+      return {
+        id: t.id,
+        title: t.title,
+        archived: !!t.archived,
+        createdAt: t.created_at,
+        updatedAt: t.updated_at,
+        messages: local?.messages || [], // lazy-loaded
+        documents: local?.documents || [],
+        _loaded: local?._loaded || false,
+      };
+    });
+    // If server has no threads (new account), clear any leftover local data
+    if (!serverThreads.length) {
+      state.threads = [];
     }
   } catch (e) {
     console.warn("[Sync] Failed to load threads from server, using local cache:", e.message);
