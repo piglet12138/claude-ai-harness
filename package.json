@@ -1,5 +1,5 @@
 {
-  "name": "lite-claude-ui",
+  "name": "claude-ai-harness",
   "version": "0.1.0",
   "private": false,
   "type": "module",
@@ -12,6 +12,7 @@
     "docx": "^9.6.1",
     "mammoth": "^1.12.0",
     "pdf-parse": "^1.1.1",
+    "pptxgenjs": "^4.0.1",
     "xlsx": "^0.18.5"
   }
 }

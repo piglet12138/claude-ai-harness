@@ -1,6 +1,6 @@
 <div align="center">
 
-# Lite Claude UI
+# Claude AI Harness
 
 **轻量级 AI Agent 工作台 — 复刻 Claude.ai 的核心 Agentic 能力**
 
@@ -25,7 +25,7 @@
 
 市面上的开源 AI UI（LibreChat、Open WebUI）功能全但太重 — MongoDB、Redis、LangChain，512MB 的 VPS 跑不动。
 
-**Lite Claude UI 用单文件 server.mjs + 纯前端实现了完整的 Agent 架构**：
+**Claude AI Harness 用单文件 server.mjs + 纯前端实现了完整的 Agent 架构**：
 
 - 单文件后端，零外部服务依赖
 - 直连 Anthropic API（不套 LangChain）
@@ -98,7 +98,7 @@
 
 ## 能力对比
 
-| 能力 | Claude.ai | Lite Claude UI | LibreChat |
+| 能力 | Claude.ai | Claude AI Harness | LibreChat |
 |------|-----------|----------------|-----------|
 | Agent Loop | ✅ | ✅ | ✅ (LangChain) |
 | Web Search | ✅ | ✅ 5-engine Fallback | ✅ Multi-provider |
@@ -124,8 +124,8 @@
 ## Quick Start
 
 ```bash
-git clone https://github.com/piglet12138/lite-claude-ui.git
-cd lite-claude-ui
+git clone https://github.com/piglet12138/claude-ai-harness.git
+cd claude-ai-harness
 npm install
 cp .env.example .env   # 编辑配置
 npm start              # → http://localhost:3040

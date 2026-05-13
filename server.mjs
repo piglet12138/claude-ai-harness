@@ -2,11 +2,13 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { tmpdir } from "node:os";
+import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
-import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage } from "./db.mjs";
+import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage, dbRatings, dbPv, dbTelemetry } from "./db.mjs";
 const XLSX = require("xlsx");
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TableRow, TableCell, Table, WidthType, BorderStyle, PageBreak } = require("docx");
 
@@ -15,12 +17,40 @@ const publicDir = path.join(root, "public");
 
 // Temporary share links (in-memory, expire after 24h)
 const shareStore = new Map();
+// Generated file store (metadata persisted as .meta.json sidecar files)
+const fileStore = new Map();
+const FILES_DIR = path.join(root, ".generated-files");
+await mkdir(FILES_DIR, { recursive: true }).catch(() => {});
+// Restore fileStore from sidecar metadata on startup
+try {
+  const entries = await fs.readdir(FILES_DIR);
+  for (const f of entries) {
+    if (!f.endsWith(".meta.json")) continue;
+    try {
+      const meta = JSON.parse(await fs.readFile(path.join(FILES_DIR, f), "utf8"));
+      if (Date.now() > meta.expires) {
+        fs.unlink(path.join(FILES_DIR, f)).catch(() => {});
+        fs.unlink(meta.filePath).catch(() => {});
+      } else {
+        fileStore.set(meta.id, meta);
+      }
+    } catch {}
+  }
+  if (fileStore.size) console.log(`[Files] Restored ${fileStore.size} file(s) from disk`);
+} catch {}
 // Long document background jobs (in-memory, expire after 2h)
 const longDocJobs = new Map();
 setInterval(() => {
   const now = Date.now();
   for (const [id, entry] of shareStore) {
     if (now > entry.expires) shareStore.delete(id);
+  }
+  for (const [id, entry] of fileStore) {
+    if (now > entry.expires) {
+      fs.unlink(entry.filePath).catch(() => {});
+      fs.unlink(path.join(FILES_DIR, `${id}.meta.json`)).catch(() => {});
+      fileStore.delete(id);
+    }
   }
   for (const [id, job] of longDocJobs) {
     if (now - job.createdAt > 7200_000) longDocJobs.delete(id);
@@ -53,18 +83,19 @@ const googleOauthStates = new Map();
 const resendApiKey = process.env.RESEND_API_KEY || env.RESEND_API_KEY || "";
 const notifyEmails = (process.env.NOTIFY_EMAILS || env.NOTIFY_EMAILS || "").split(",").map(s => s.trim()).filter(Boolean);
 
-async function sendNotifyEmail(subject, text) {
+async function sendNotifyEmail(subject, text, html) {
   if (!resendApiKey || !notifyEmails.length) return;
   try {
+    const payload = {
+      from: "Claude Lite <noreply@yaoyuheng2001.me>",
+      to: notifyEmails,
+      subject,
+    };
+    if (html) payload.html = html; else payload.text = text;
     const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${resendApiKey}` },
-      body: JSON.stringify({
-        from: "Claude Lite <noreply@yaoyuheng2001.me>",
-        to: notifyEmails,
-        subject,
-        text,
-      }),
+      body: JSON.stringify(payload),
     });
     const data = await resp.json();
     console.log(`[Email] ${resp.ok ? "Sent" : "Failed"}: ${subject}`, resp.ok ? "" : JSON.stringify(data));
@@ -98,7 +129,9 @@ const agenticSystemPrompt = [
   "工具说明：",
   "- web_search：搜索互联网，返回摘要+自动抓取的全文。用精确关键词，不要整句搜索。",
   "- fetch_url：读取指定 URL 全文。用于深入阅读搜索结果或用户给的链接。",
-  "- run_code：执行 JavaScript/Python 代码。用于计算、数据处理、验证。",
+  "- run_code：执行 JavaScript/Python 代码。用于计算、数据处理、验证、**生成 Office 文件**。",
+  "  生成的 .docx/.xlsx/.pptx/.pdf/.csv 文件会自动被捕获并提供下载链接。",
+  "  **重要：文件必须保存在当前目录，只写文件名，不要用绝对路径。** 如 'report.docx' 而非 '/tmp/report.docx'。",
   "- generate_long_document：生成长篇报告/白皮书/论文。多个子Agent并行撰写，支持50-100页。",
   "- create_artifact：创建普通文档/网页/代码，显示在右侧面板。适合10页以内的内容。",
   "",
@@ -143,6 +176,74 @@ const agenticSystemPrompt = [
   '["问题1", "问题2", "问题3"]',
   "<</suggestions>>",
   "规则：具体、有价值、20字以内。简单闲聊可以不加。",
+  "",
+  "## 生成 Office 文件（run_code 高级用法）",
+  "",
+  "当用户要求生成可下载的 Word/Excel/PPT/PDF 文件时，用 run_code 执行代码生成文件。",
+  "文件保存在当前目录即可，系统会自动捕获并提供下载链接。",
+  "",
+  "### DOCX (Word) — JavaScript, 用 docx 库",
+  "```javascript",
+  'const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell,',
+  '  AlignmentType, WidthType, BorderStyle, PageBreak, Header, Footer, PageNumber,',
+  '  ImageRun, ExternalHyperlink, LevelFormat, ShadingType } = require("docx");',
+  'const fs = require("fs");',
+  "const doc = new Document({",
+  "  styles: { default: { document: { run: { font: 'Arial', size: 24 } } } },",
+  "  sections: [{ properties: { page: { size: { width: 12240, height: 15840 }, margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 } } },",
+  "    children: [ new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun('Title')] }) ] }]",
+  "});",
+  'Packer.toBuffer(doc).then(buf => fs.writeFileSync("output.docx", buf));',
+  "```",
+  "要点：页面默认A4，美国信纸用 12240x15840 DXA；用 LevelFormat.BULLET 做列表，不要用 unicode 符号；",
+  "表格必须设 columnWidths + cell width，用 WidthType.DXA；图片需要 type 参数。",
+  "",
+  "### XLSX (Excel) — Python, 用 openpyxl",
+  "```python",
+  "from openpyxl import Workbook",
+  "from openpyxl.styles import Font, PatternFill, Alignment",
+  "wb = Workbook()",
+  "ws = wb.active",
+  "ws.title = 'Sheet1'",
+  "ws['A1'] = 'Header'",
+  "ws['A1'].font = Font(bold=True)",
+  "ws.column_dimensions['A'].width = 20",
+  "ws['B2'] = '=SUM(B3:B10)'  # 用公式，不要硬编码计算值",
+  "wb.save('output.xlsx')",
+  "```",
+  "要点：用 Excel 公式而非 Python 计算硬编码；openpyxl 的行列从 1 开始。",
+  "",
+  "### PPTX (PowerPoint) — JavaScript, 用 pptxgenjs",
+  "```javascript",
+  'const PptxGenJS = require("pptxgenjs");',
+  "const pptx = new PptxGenJS();",
+  "pptx.layout = 'LAYOUT_16x9';",
+  "let slide = pptx.addSlide();",
+  "slide.addText('Title', { x: 0.5, y: 0.5, w: 9, h: 1.5, fontSize: 36, bold: true, color: '1E2761' });",
+  "slide.addText('Body text', { x: 0.5, y: 2.5, w: 9, h: 3, fontSize: 16 });",
+  "// 支持: addImage, addChart, addTable, addShape",
+  "pptx.writeFile({ fileName: 'output.pptx' });",
+  "```",
+  "要点：坐标单位是英寸；选用大胆配色，不要白底黑字；每页都要有视觉元素。",
+  "",
+  "### PDF — Python, 用 reportlab",
+  "```python",
+  "from reportlab.lib.pagesizes import letter",
+  "from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer",
+  "from reportlab.lib.styles import getSampleStyleSheet",
+  "doc = SimpleDocTemplate('output.pdf', pagesize=letter)",
+  "styles = getSampleStyleSheet()",
+  "story = [Paragraph('Title', styles['Title']), Spacer(1,12), Paragraph('Content', styles['Normal'])]",
+  "doc.build(story)",
+  "```",
+  "要点：不要用 unicode 上下标（会变黑块），用 <sub>/<super> 标签。",
+  "",
+  "### 选择指南",
+  "- 用户说「Word文档」「docx」→ 用 docx (JS)",
+  "- 用户说「Excel」「表格文件」「xlsx」→ 用 openpyxl (Python)",
+  "- 用户说「PPT」「幻灯片」「演示文稿」「pptx」→ 用 pptxgenjs (JS)",
+  "- 用户说「PDF」→ 用 reportlab (Python)",
+  "- 不确定格式时，优先用 create_artifact 生成 HTML 文档（可在线预览）",
 ].join("\n");
 
 const anthropicTools = [
@@ -170,7 +271,7 @@ const anthropicTools = [
   },
   {
     name: "run_code",
-    description: "Execute JavaScript or Python code. Use for calculations, data processing, generating charts, or demonstrating code. Python has numpy, pandas, matplotlib available. Matplotlib charts are auto-captured and displayed inline — just use plt.plot()/plt.savefig() normally. Returns stdout/stderr and any generated images.",
+    description: "Execute JavaScript or Python code. Use for calculations, data processing, generating charts, or demonstrating code. Python has numpy, pandas, matplotlib, openpyxl, reportlab available. JavaScript has docx, pptxgenjs available via require(). Generated files (.docx, .xlsx, .pptx, .pdf, .csv) are auto-captured and provided as download links. Matplotlib charts are auto-captured as inline images.",
     input_schema: {
       type: "object",
       properties: {
@@ -354,6 +455,48 @@ const server = http.createServer(async (req, res) => {
       return json(res, dbUsers.list());
     }
 
+    if (req.method === "POST" && url.pathname === "/api/admin/users") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      const body = await readJson(req, 32 * 1024);
+      const email = String(body?.email || "").trim().toLowerCase();
+      const password = String(body?.password || "");
+      const role = body?.role === "admin" ? "admin" : "user";
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, { error: "邮箱格式不正确" }, 400);
+      if (password.length < 6) return json(res, { error: "密码至少 6 位" }, 400);
+      if (dbUsers.getByEmail(email)) return json(res, { error: "该邮箱已注册" }, 409);
+      const salt = crypto.randomBytes(16).toString("hex");
+      const id = crypto.randomUUID();
+      dbUsers.create(id, email, hashPwd(password, salt), salt, role);
+      return json(res, { ok: true, id, email, role });
+    }
+
+    if (url.pathname.startsWith("/api/admin/users/") && url.pathname.split("/").length === 5) {
+      const userId = url.pathname.split("/")[4];
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+
+      if (req.method === "PATCH") {
+        const body = await readJson(req, 32 * 1024);
+        if (body.role) {
+          const newRole = body.role === "admin" ? "admin" : "user";
+          dbUsers.updateRole(userId, newRole);
+        }
+        if (body.password) {
+          if (body.password.length < 6) return json(res, { error: "密码至少 6 位" }, 400);
+          const salt = crypto.randomBytes(16).toString("hex");
+          dbUsers.updatePassword(userId, hashPwd(body.password, salt), salt);
+        }
+        return json(res, { ok: true });
+      }
+
+      if (req.method === "DELETE") {
+        if (userId === session.userId) return json(res, { error: "不能删除自己" }, 400);
+        dbUsers.delete(userId);
+        return json(res, { ok: true });
+      }
+    }
+
     // =========================================================================
     // Thread / Message / Document API (SQLite-backed)
     // =========================================================================
@@ -503,10 +646,13 @@ const server = http.createServer(async (req, res) => {
       try { reports = JSON.parse(await fs.readFile(reportsFile, "utf8")); } catch {}
       reports.push({ id: crypto.randomUUID(), email: session.email, text, images: imagePaths, userAgent: String(req.headers["user-agent"] || "").slice(0, 200), createdAt: new Date().toISOString() });
       await fs.writeFile(reportsFile, JSON.stringify(reports, null, 2), "utf8");
-      // Send email notification (non-blocking)
+      // Send email notification with images (non-blocking)
+      const siteUrl = `https://claude.yaoyuheng2001.me`;
+      const imgsHtml = imagePaths.map(p => `<p><img src="${siteUrl}${p}" style="max-width:600px;border-radius:8px;border:1px solid #ddd" /></p>`).join("");
       sendNotifyEmail(
         `[Bug Report] ${text.slice(0, 50)}`,
-        `From: ${session.email}\n\n${text}${imagePaths.length ? `\n\n[${imagePaths.length} 张截图]` : ""}`
+        null,
+        `<div style="font-family:sans-serif;max-width:640px"><p style="color:#666">From: ${session.email}</p><p style="white-space:pre-wrap;line-height:1.6">${text.replace(/</g,"&lt;")}</p>${imgsHtml}<hr style="border:none;border-top:1px solid #eee;margin:20px 0"><p style="font-size:12px;color:#999"><a href="${siteUrl}/admin">管理后台</a></p></div>`
       ).catch(() => {});
       return json(res, { ok: true });
     }
@@ -534,6 +680,68 @@ const server = http.createServer(async (req, res) => {
       let reports = [];
       try { reports = JSON.parse(await fs.readFile(reportsFile, "utf8")); } catch {}
       return json(res, reports.reverse());
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/conversations") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      return json(res, dbThreads.listAll());
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/admin/conversations/")) {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      const threadId = url.pathname.split("/")[4];
+      const thread = dbThreads.getById(threadId);
+      if (!thread) return json(res, { error: "Not found" }, 404);
+      const messages = dbMessages.list(threadId);
+      const ratings = dbRatings.getThreadRatings(threadId);
+      return json(res, { thread, messages, ratings });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/ratings") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      return json(res, { ratings: dbRatings.all(), stats: dbRatings.stats() });
+    }
+
+    // User-facing rating API
+    if (req.method === "POST" && url.pathname.startsWith("/api/messages/") && url.pathname.endsWith("/rate")) {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const parts = url.pathname.split("/");
+      const messageId = parts[3];
+      const body = await readJson(req, 1024);
+      const rating = body?.rating;
+      if (rating !== 1 && rating !== -1) return json(res, { error: "rating must be 1 or -1" }, 400);
+      const threadId = body?.thread_id;
+      if (!threadId) return json(res, { error: "thread_id required" }, 400);
+      dbRatings.upsert(messageId, threadId, session.userId, rating);
+      return json(res, { ok: true });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/ratings") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const threadId = url.searchParams.get("thread_id");
+      if (!threadId) return json(res, { error: "thread_id required" }, 400);
+      return json(res, dbRatings.getThreadRatings(threadId));
+    }
+
+    // Analytics: PV tracking
+    if (req.method === "POST" && url.pathname === "/api/analytics/pv") {
+      try {
+        const body = await readJson(req, 4096);
+        dbPv.record(body?.path || "", body?.referrer || "", body?.screen || "", body?.fp || "");
+      } catch {}
+      return json(res, { ok: true });
+    }
+
+    // Admin: telemetry export
+    if (req.method === "GET" && url.pathname === "/api/admin/telemetry") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      return json(res, { telemetry: dbTelemetry.all(), stats: dbTelemetry.stats() });
     }
 
     if (req.method === "POST" && url.pathname === "/api/import-docx") {
@@ -586,6 +794,26 @@ const server = http.createServer(async (req, res) => {
       return json(res, { results });
     }
 
+    // ── Files: download generated file ──
+    if (req.method === "GET" && url.pathname.startsWith("/api/files/")) {
+      const fileId = url.pathname.slice("/api/files/".length);
+      const entry = fileStore.get(fileId);
+      if (!entry) { res.writeHead(404); res.end("File not found or expired"); return; }
+      try {
+        const data = await fs.readFile(entry.filePath);
+        const safeName = encodeURIComponent(entry.fileName);
+        res.writeHead(200, {
+          "content-type": entry.mime,
+          "content-disposition": `attachment; filename*=UTF-8''${safeName}`,
+          "content-length": data.length,
+        });
+        res.end(data);
+      } catch {
+        res.writeHead(410); res.end("File no longer available");
+      }
+      return;
+    }
+
     // ── Share: create temporary link ──
     if (req.method === "POST" && url.pathname === "/api/share") {
       if (!readSession(req)) return json(res, { error: "Unauthorized" }, 401);
@@ -632,6 +860,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/admin") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") {
+        res.writeHead(302, { Location: "/app" });
+        res.end();
+        return;
+      }
       return staticFile("/admin.html", res);
     }
 
@@ -840,12 +1074,16 @@ async function chat(req, res) {
   res.write(": stream\n\n");
 
   const MAX_ROUNDS = 8;
+  const chatStartTime = Date.now();
+  const collectedToolCalls = [];
 
   const TOKEN_BUDGET = 80000; // Conservative budget to leave room for response
   let totalInputTokens = 0, totalOutputTokens = 0;
+  let totalRounds = 0;
 
   try {
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    totalRounds = round + 1;
     console.log(`[Chat] Round ${round} start, messages: ${apiMessages.length}, est tokens: ${estimateTokens(apiMessages)}`);
     const isLastRound = round === MAX_ROUNDS - 1;
     // Proactive context management: compress if approaching budget
@@ -905,6 +1143,7 @@ async function chat(req, res) {
             for (const tc of retryResult.toolUseBlocks) {
               res.write(`event: tool_start\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, args: toolDisplayArgs(tc.name, tc.input) })}\n\n`);
               console.log(`[Chat] Executing tool: ${tc.name}`);
+              collectedToolCalls.push(tc.name);
         const toolResult = await executeTool(tc.name, tc.input, res);
               if (tc.name === "create_artifact") {
                 const artifactDoc = { title: tc.input.title || "Artifact", type: tc.input.type || "html", content: tc.input.content || "", language: tc.input.language || "", description: tc.input.description || "", file_path: tc.input.file_path || "" };
@@ -950,6 +1189,7 @@ async function chat(req, res) {
       const toolResultBlocks = [];
       let hasArtifact = false;
       for (const tc of result.toolUseBlocks) {
+        collectedToolCalls.push(tc.name);
         res.write(`event: tool_start\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, args: toolDisplayArgs(tc.name, tc.input) })}\n\n`);
         res.flush?.();
 
@@ -976,6 +1216,27 @@ async function chat(req, res) {
             res.write(`event: artifact\ndata: ${JSON.stringify(artifactDoc)}\n\n`);
             res.flush?.();
           } catch {}
+        }
+
+        // Emit generated files as file-type artifacts for document panel
+        if (tc.name === "run_code" && toolResult.codeResult?.files?.length) {
+          for (const f of toolResult.codeResult.files) {
+            const ext = f.name.split(".").pop().toLowerCase();
+            const artifactDoc = {
+              title: f.name,
+              type: "file",
+              content: "",
+              language: ext,
+              description: `${ext.toUpperCase()} 文件 · ${f.size > 1024 * 1024 ? (f.size / 1024 / 1024).toFixed(1) + " MB" : Math.round(f.size / 1024) + " KB"}`,
+              file_path: f.name,
+              fileId: f.id,
+              fileSize: f.size,
+            };
+            if (chatThreadId) {
+              try { dbDocuments.upsert(chatThreadId, { id: crypto.randomUUID(), ...artifactDoc }); } catch {}
+            }
+            try { res.write(`event: artifact\ndata: ${JSON.stringify(artifactDoc)}\n\n`); res.flush?.(); } catch {}
+          }
         }
 
         res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary, sources: toolResult.sources || undefined, codeResult: toolResult.codeResult || undefined })}\n\n`);
@@ -1042,9 +1303,10 @@ async function chat(req, res) {
       res.write(`data: ${JSON.stringify({ delta: `\n\n---\n请求出错：${String(loopErr.message).slice(0, 200)}` })}\n\n`);
     } catch {}
   }
-  // Record usage
+  // Record usage + telemetry
+  const session = readSession(req);
+  const latencyMs = Date.now() - chatStartTime;
   if (totalInputTokens || totalOutputTokens) {
-    const session = readSession(req);
     if (session) {
       try {
         dbUsage.record(session.userId, totalInputTokens, totalOutputTokens, model);
@@ -1052,6 +1314,12 @@ async function chat(req, res) {
     }
     console.log(`[Chat] Total tokens: input=${totalInputTokens}, output=${totalOutputTokens}`);
   }
+  // Telemetry: record tool calls, latency, message preview
+  try {
+    const lastUserMsg = messages.findLast(m => m.role === "user");
+    const preview = typeof lastUserMsg?.content === "string" ? lastUserMsg.content.slice(0, 2000) : "";
+    dbTelemetry.record(session?.userId || "", chatThreadId || "", collectedToolCalls, totalInputTokens, totalOutputTokens, latencyMs, preview, model, totalRounds);
+  } catch (e) { console.error("[Telemetry] Failed to record:", e.message); }
   try {
     res.write("event: done\ndata: {}\n\n");
     res.end();
@@ -1177,7 +1445,10 @@ async function consumeAnthropicStream(body, res) {
 
           case "message_delta":
             if (data.delta?.stop_reason) stopReason = data.delta.stop_reason;
-            if (data.usage?.output_tokens) outputTokens = data.usage.output_tokens;
+            if (data.usage) {
+              if (data.usage.output_tokens) outputTokens = data.usage.output_tokens;
+              if (data.usage.input_tokens) inputTokens = data.usage.input_tokens;
+            }
             break;
         }
       } catch {
@@ -1761,12 +2032,20 @@ async function executeCode(language, code) {
   // Create a temp working directory for this execution
   const workDir = path.join(tmpdir(), `claude-exec-${Date.now()}`);
   await mkdir(workDir, { recursive: true });
-  const ext = language === "python" ? "py" : "mjs";
+  const ext = language === "python" ? "py" : "cjs";
   const tmpFile = path.join(workDir, `code.${ext}`);
 
-  // For Python: auto-inject Agg backend and auto-save any open figures
+  // For JavaScript: inject require support for npm packages
   let finalCode = code;
+  if (language !== "python") {
+    // .cjs supports require() natively — prepend module paths so it finds project deps
+    const jsPreamble = `const Module = require("module");\nconst _origResolve = Module._resolveFilename;\nModule._resolveFilename = function(request, parent, ...args) {\n  try { return _origResolve.call(this, request, parent, ...args); } catch {\n    return require.resolve(request, { paths: [${JSON.stringify(path.join(root, "node_modules"))}] });\n  }\n};\n`;
+    finalCode = jsPreamble + code;
+  }
+
+  // For Python: auto-inject Agg backend and auto-save any open figures
   if (language === "python") {
+    finalCode = code;
     const preamble = `import matplotlib\nmatplotlib.use("Agg")\nimport matplotlib.font_manager as _fm\nfor _p in ["/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"]:\n    try: _fm.fontManager.addfont(_p)\n    except: pass\nmatplotlib.rcParams["font.sans-serif"] = ["WenQuanYi Zen Hei", "Noto Sans CJK JP"] + matplotlib.rcParams["font.sans-serif"]\nmatplotlib.rcParams["axes.unicode_minus"] = False\n`;
     const postamble = `\n\n# Auto-save open matplotlib figures (skip if user already saved images)\ntry:\n    import os as _os, matplotlib.pyplot as _plt\n    _has_images = any(f.endswith((".png",".jpg",".jpeg",".svg")) for f in _os.listdir("."))\n    if not _has_images and _plt.get_fignums():\n        for _i, _fig in enumerate(_plt.get_fignums()):\n            _plt.figure(_fig).savefig(f"${workDir}/figure_{_i}.png", dpi=150, bbox_inches="tight")\nexcept Exception:\n    pass\n`;
     finalCode = preamble + code + postamble;
@@ -1792,15 +2071,59 @@ async function executeCode(language, code) {
           }
         }
       } catch {}
+
+      // Scan for generated downloadable files (office docs, PDFs, ZIPs, etc.)
+      const generatedFiles = [];
+      const FILE_RE = /\.(docx|xlsx|pptx|pdf|zip|csv)$/i;
+      const mimeMap = {
+        docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        pdf: "application/pdf", zip: "application/zip", csv: "text/csv",
+      };
+      const captureFile = async (srcPath, displayName) => {
+        try {
+          const fileId = crypto.randomUUID();
+          const ext = path.extname(displayName).slice(1).toLowerCase();
+          const destPath = path.join(FILES_DIR, `${fileId}.${ext}`);
+          const { copyFile, stat } = await import("node:fs/promises");
+          await copyFile(srcPath, destPath);
+          const info = await stat(destPath);
+          const meta = {
+            id: fileId, filePath: destPath, fileName: displayName,
+            mime: mimeMap[ext] || "application/octet-stream",
+            size: info.size, expires: Date.now() + 7 * 24 * 3600_000, // 7 days
+          };
+          fileStore.set(fileId, meta);
+          // Persist metadata sidecar for restart recovery
+          fs.writeFile(path.join(FILES_DIR, `${fileId}.meta.json`), JSON.stringify(meta)).catch(() => {});
+          generatedFiles.push({ id: fileId, name: displayName, size: info.size });
+        } catch {}
+      };
+      // 1) Scan workDir for generated files
+      try {
+        const allFiles = await readdir(workDir);
+        for (const f of allFiles) {
+          if (FILE_RE.test(f)) await captureFile(path.join(workDir, f), f);
+        }
+      } catch {}
+      // 2) Fallback: scan stdout for absolute paths to generated files outside workDir
+      if (!generatedFiles.length && stdout) {
+        const pathMatches = stdout.match(/\/[^\s:,"']+\.(docx|xlsx|pptx|pdf|zip|csv)/gi) || [];
+        for (const p of pathMatches) {
+          if (!p.startsWith(workDir)) await captureFile(p, path.basename(p));
+        }
+      }
+
       // Cleanup
       rm(workDir, { recursive: true, force: true }).catch(() => {});
 
       if (err) {
         // Strip the preamble/postamble line numbers from error messages
-        const cleanErr = (stderr || err.message || "Execution failed").replace(/code\.py/g, "script");
-        resolve({ output: cleanErr, error: true, images });
+        const cleanErr = (stderr || err.message || "Execution failed").replace(/code\.(py|cjs)/g, "script");
+        resolve({ output: cleanErr, error: true, images, files: generatedFiles });
       } else {
-        resolve({ output: stdout + (stderr ? `\n[stderr]: ${stderr}` : ""), error: false, images });
+        resolve({ output: stdout + (stderr ? `\n[stderr]: ${stderr}` : ""), error: false, images, files: generatedFiles });
       }
     });
   });

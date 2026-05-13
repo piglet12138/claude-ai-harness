@@ -171,7 +171,13 @@ function wireEvents() {
   els.downloadDoc.addEventListener("click", () => {
     const doc = activeDocument();
     if (!doc) return;
-    if (doc.type === "html") {
+    if (doc.type === "file" && doc.fileId) {
+      // File artifact: direct download
+      const a = document.createElement("a");
+      a.href = `/api/files/${doc.fileId}`;
+      a.download = doc.title;
+      a.click();
+    } else if (doc.type === "html") {
       downloadCurrentDoc("html");
     } else if (doc.type === "code") {
       downloadCurrentDoc("source");
@@ -425,8 +431,8 @@ async function showChat() {
   if (!state.threads.length) createThread();
   state.activeId ||= state.threads[0].id;
   render();
-  // Load messages for active thread
-  await loadThreadData(state.activeId);
+  // Load messages for active thread (force reload to pick up ratings)
+  await loadThreadData(state.activeId, true);
   render();
   // Migrate localStorage data to server (one-time)
   await migrateLocalToServer();
@@ -534,15 +540,18 @@ async function loadThreadData(threadId, forceReload) {
   if (!thread) return;
   if (thread._loaded && !forceReload) return;
   try {
-    const [serverMessages, documents] = await Promise.all([
+    const [serverMessages, documents, ratings] = await Promise.all([
       fetchJson("/api/threads/" + threadId + "/messages"),
       fetchJson("/api/threads/" + threadId + "/documents"),
+      fetchJson("/api/ratings?thread_id=" + threadId).catch(() => []),
     ]);
+    const ratingMap = new Map(ratings.map(r => [r.message_id, r.rating]));
     const mappedServer = serverMessages.map(m => ({
       id: m.id,
       role: m.role,
       content: m.content,
       toolCalls: m.toolCalls,
+      _feedback: ratingMap.has(m.id) ? (ratingMap.get(m.id) === 1 ? "up" : "down") : null,
     }));
     // Keep local messages if they have more content (e.g. partial streaming saved locally)
     const localLen = (thread.messages || []).reduce((s, m) => s + (typeof m.content === "string" ? m.content.length : 0), 0);
@@ -550,6 +559,10 @@ async function loadThreadData(threadId, forceReload) {
     if (localLen > serverLen && thread.messages.length >= mappedServer.length) {
       // Local has more content — keep it and sync to server
       console.log("[Sync] Local messages have more content, keeping local and syncing up");
+      // Apply ratings to local messages
+      for (const m of thread.messages) {
+        if (m.id && ratingMap.has(m.id)) m._feedback = ratingMap.get(m.id) === 1 ? "up" : "down";
+      }
       syncMessages(threadId, thread.messages);
     } else {
       thread.messages = mappedServer;
@@ -759,7 +772,8 @@ function renderDocuments() {
   for (const doc of docs) {
     const item = document.createElement("div");
     item.className = `thread-item${doc.id === state.activeDocId ? " active" : ""}`;
-    item.innerHTML = `<span class="thread-label">${escapeHtml(doc.title)}</span><small>${doc.source || ""}</small>`;
+    const fileIcon = doc.type === "file" ? { docx: "📄", xlsx: "📊", pptx: "📽", pdf: "📕", csv: "📋", zip: "📦" }[doc.language] || "📁" : "";
+    item.innerHTML = `<span class="thread-label">${fileIcon ? fileIcon + " " : ""}${escapeHtml(doc.title)}</span><small>${doc.source || ""}</small>`;
 
     const more = document.createElement("button");
     more.className = "thread-more-btn";
@@ -1054,6 +1068,29 @@ function renderMessageActions(message, isStreamingMessage) {
     regen.addEventListener("click", () => regenerateLastMessage());
     actions.append(regen);
   }
+  // Feedback buttons (assistant messages only, not during streaming)
+  if (message.role === "assistant" && !isStreamingMessage && message.content) {
+    const feedbackDiv = document.createElement("div");
+    feedbackDiv.className = "feedback-buttons";
+
+    const thumbUp = document.createElement("button");
+    thumbUp.type = "button";
+    thumbUp.className = `message-action feedback-btn${message._feedback === "up" ? " active" : ""}`;
+    thumbUp.title = "有帮助";
+    thumbUp.innerHTML = '<span aria-hidden="true">&#x1F44D;</span>';
+    thumbUp.addEventListener("click", () => submitFeedback(message, "up", thumbUp, thumbDown));
+
+    const thumbDown = document.createElement("button");
+    thumbDown.type = "button";
+    thumbDown.className = `message-action feedback-btn${message._feedback === "down" ? " active" : ""}`;
+    thumbDown.title = "没帮助";
+    thumbDown.innerHTML = '<span aria-hidden="true">&#x1F44E;</span>';
+    thumbDown.addEventListener("click", () => submitFeedback(message, "down", thumbUp, thumbDown));
+
+    feedbackDiv.append(thumbUp, thumbDown);
+    actions.append(feedbackDiv);
+  }
+
   // Edit button for user messages
   if (message.role === "user" && !state.streaming) {
     const edit = document.createElement("button");
@@ -1066,6 +1103,29 @@ function renderMessageActions(message, isStreamingMessage) {
   }
 
   return actions;
+}
+
+async function submitFeedback(message, feedback, thumbUp, thumbDown) {
+  // Toggle: clicking same button again removes feedback
+  if (message._feedback === feedback) {
+    message._feedback = null;
+    thumbUp.classList.remove("active");
+    thumbDown.classList.remove("active");
+    return;
+  }
+  message._feedback = feedback;
+  thumbUp.classList.toggle("active", feedback === "up");
+  thumbDown.classList.toggle("active", feedback === "down");
+  try {
+    const rating = feedback === "up" ? 1 : -1;
+    await fetch("/api/messages/" + encodeURIComponent(message.id) + "/rate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rating, thread_id: state.activeId }),
+    });
+  } catch (e) {
+    console.error("[Feedback]", e);
+  }
 }
 
 function editUserMessage(message) {
@@ -1095,7 +1155,7 @@ function regenerateLastMessage() {
   const lastUser = thread.messages.at(-1);
   if (!lastUser || lastUser.role !== "user") return;
   // Re-trigger send with existing user message
-  thread.messages.push({ role: "assistant", content: "", toolCalls: [], _streamStart: Date.now() });
+  thread.messages.push({ id: crypto.randomUUID(), role: "assistant", content: "", toolCalls: [], _streamStart: Date.now() });
   state.streaming = true;
   state.abortController = new AbortController();
   updateSendButton();
@@ -1242,6 +1302,22 @@ function renderToolCard(tc) {
   if (tc.name === "run_code" && tc.codeResult) {
     const output = document.createElement("div");
     output.className = `tool-code-output${tc._expanded ? " expanded" : ""}${tc.codeResult.images?.length ? " has-images" : ""}`;
+    // Show generated downloadable files
+    if (tc.codeResult.files?.length) {
+      const filesContainer = document.createElement("div");
+      filesContainer.className = "code-output-files";
+      for (const f of tc.codeResult.files) {
+        const a = document.createElement("a");
+        a.href = `/api/files/${f.id}`;
+        a.download = f.name;
+        a.className = "file-download-btn";
+        const ext = f.name.split(".").pop().toUpperCase();
+        const sizeStr = f.size > 1024 * 1024 ? `${(f.size / 1024 / 1024).toFixed(1)} MB` : `${Math.round(f.size / 1024)} KB`;
+        a.innerHTML = `<span class="file-icon">${ext === "DOCX" ? "📄" : ext === "XLSX" ? "📊" : ext === "PPTX" ? "📽" : ext === "PDF" ? "📕" : "📁"}</span><span class="file-info"><span class="file-name">${escapeHtml(f.name)}</span><span class="file-size">${sizeStr}</span></span><span class="file-dl-icon">↓</span>`;
+        filesContainer.append(a);
+      }
+      output.append(filesContainer);
+    }
     // Show generated images inline
     if (tc.codeResult.images?.length) {
       const imgContainer = document.createElement("div");
@@ -1264,8 +1340,8 @@ function renderToolCard(tc) {
       output.classList.toggle("expanded", tc._expanded);
       card.querySelector(".tool-chevron")?.classList.toggle("expanded", tc._expanded);
     });
-    // Auto-expand if there are images
-    if (tc.codeResult.images?.length && !tc._expanded) {
+    // Auto-expand if there are images or files
+    if ((tc.codeResult.images?.length || tc.codeResult.files?.length) && !tc._expanded) {
       tc._expanded = true;
       output.classList.add("expanded");
     }
@@ -1519,7 +1595,11 @@ function renderDocumentPanel() {
   els.docTitle.textContent = doc.title;
   els.docMeta.textContent = artifactMeta(doc);
   els.downloadHtml?.classList.toggle("hidden", doc.type !== "document" && doc.type !== "html");
-  els.downloadDoc.textContent = doc.type === "html" ? "下载源码" : doc.type === "code" ? "下载源码" : "下载 DOCX";
+  els.uploadGoogleDoc?.classList.toggle("hidden", doc.type === "file");
+  els.artifactPreviewTab?.classList.toggle("hidden", doc.type === "file");
+  els.artifactSourceTab?.classList.toggle("hidden", doc.type === "file");
+  els.shareDoc?.classList.toggle("hidden", doc.type === "file");
+  els.downloadDoc.textContent = doc.type === "file" ? "下载" : doc.type === "html" ? "下载源码" : doc.type === "code" ? "下载源码" : "下载 DOCX";
   // Version navigation
   renderVersionNav(doc);
   els.uploadGoogleDoc.disabled = false;
@@ -1533,7 +1613,17 @@ function renderDocumentPanel() {
     return;
   }
   els.docPreview.className = `doc-preview ${doc.type === "html" ? "html-preview" : ""}`;
-  if (doc.type === "html") {
+  if (doc.type === "file" && doc.fileId) {
+    const ext = (doc.language || doc.filePath?.split(".").pop() || "").toUpperCase();
+    const sizeStr = doc.fileSize > 1024 * 1024 ? `${(doc.fileSize / 1024 / 1024).toFixed(1)} MB` : `${Math.round((doc.fileSize || 0) / 1024)} KB`;
+    const iconMap = { DOCX: "📄", XLSX: "📊", PPTX: "📽", PDF: "📕", CSV: "📋", ZIP: "📦" };
+    els.docPreview.innerHTML = `<div class="file-artifact-preview">
+      <div class="file-artifact-icon">${iconMap[ext] || "📁"}</div>
+      <div class="file-artifact-name">${escapeHtml(doc.title)}</div>
+      <div class="file-artifact-meta">${ext} 文件 · ${sizeStr}</div>
+      <a href="/api/files/${doc.fileId}" download="${escapeAttribute(doc.title)}" class="file-artifact-download">下载文件</a>
+    </div>`;
+  } else if (doc.type === "html") {
     els.docPreview.innerHTML = `<iframe title="Artifact preview" sandbox="allow-scripts allow-forms allow-modals allow-popups" srcdoc="${escapeAttribute(displayContent)}"></iframe>`;
   } else {
     els.docPreview.innerHTML = renderRichDocument(displayContent, "document");
@@ -1642,9 +1732,9 @@ async function send(event) {
   const apiContent = buildUserApiContent(text, attachments);
   state.expectDocument = false; // Artifact creation is now driven by tool use only
 
-  thread.messages.push({ role: "user", content: userContent, attachments: displayAttachments });
+  thread.messages.push({ id: crypto.randomUUID(), role: "user", content: userContent, attachments: displayAttachments });
   thread.title = titleFrom(userContent || displayAttachments[0]?.name || "图片");
-  thread.messages.push({ role: "assistant", content: "", toolCalls: [], _streamStart: Date.now() });
+  thread.messages.push({ id: crypto.randomUUID(), role: "assistant", content: "", toolCalls: [], _streamStart: Date.now() });
   state.attachments = [];
   els.prompt.value = "";
   autosize();
@@ -1938,6 +2028,11 @@ function upsertArtifactFromTool(data, thread) {
     view: artifactType === "code" ? "source" : "preview",
     updatedAt: Date.now(),
   };
+  // File-type artifacts carry download metadata
+  if (artifactType === "file" && data.fileId) {
+    payload.fileId = data.fileId;
+    payload.fileSize = data.fileSize || 0;
+  }
   if (existing) {
     existing.versions = existing.versions || [];
     existing.versions.push({ content: existing.content, title: existing.title, updatedAt: existing.updatedAt });

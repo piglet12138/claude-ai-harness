@@ -1,4 +1,4 @@
-name = "lite-claude-ui"
+name = "claude-ai-harness"
 main = "src/worker.js"
 compatibility_date = "2026-05-04"
 assets = { directory = "./public", binding = "ASSETS" }

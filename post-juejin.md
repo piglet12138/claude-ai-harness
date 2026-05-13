@@ -1,14 +1,11 @@
 # 自己写了一个 Claude Agent 前端之后，对 Agent 的一些想法
 
-> GitHub: <https://github.com/piglet12138/claude-ai-harness>
-> 
-> 在线体验: <https://claude.yaoyuheng2001.me>
+> GitHub: https://github.com/piglet12138/claude-ai-harness
+> 在线体验: https://claude.yaoyuheng2001.me
 
 去年开始用 Claude.ai，觉得它的 Agent 体验做得很好——你问一个问题，它会自己决定要不要搜索、要不要写代码、要不要生成文档。整个过程不需要你指挥，它自己来。
 
 后来想在自己的服务器上跑一个类似的东西，看了一圈 Open WebUI、LibreChat，都有点重。于是自己写了一个。
-
-![主界面](https://p0-xtjj-private.juejin.cn/tos-cn-i-73owjymdk6/894255cdd94f4bf4b123fa79404c0d52~tplv-73owjymdk6-jj-mark-v1:0:0:0:0:5o6Y6YeR5oqA5pyv56S-5Yy6IEAgcGlnbGV0MTIxMzg=:q75.awebp?policy=eyJ2bSI6MywidWlkIjoiMzE1OTM3NzI3OTE5MDIxOCJ9&rk3s=e9ecf3d6&x-orig-authkey=f32326d3454f2ac7e96d3d06cdbb035152127018&x-orig-expires=1778324198&x-orig-sign=%2BUe0eN1QHoX6cj5gCnV4xv8Xisc%3D)
 
 写完之后，对"AI Agent"这个词有了一些不太一样的理解。先放几个实际运行的截图，然后聊聊我的想法。
 
@@ -18,7 +15,7 @@
 
 > "最近 OpenAI 和 Google 在 AI Agent 方面有什么新动作？帮我梳理一下"
 
-![Agent 搜索](https://p0-xtjj-private.juejin.cn/tos-cn-i-73owjymdk6/0c7a1a7fab5349fc9bd3319821a8efee~tplv-73owjymdk6-jj-mark-v1:0:0:0:0:5o6Y6YeR5oqA5pyv56S-5Yy6IEAgcGlnbGV0MTIxMzg=:q75.awebp?policy=eyJ2bSI6MywidWlkIjoiMzE1OTM3NzI3OTE5MDIxOCJ9&rk3s=e9ecf3d6&x-orig-authkey=f32326d3454f2ac7e96d3d06cdbb035152127018&x-orig-expires=1778324198&x-orig-sign=57ViBBUvNQausAae3%2FWdF%2FdTEwA%3D)
+![Agent 搜索](demo-pic/2.png)
 
 模型自己搜了两次（不同关键词），读了 4 篇全文，然后开始回答。这个过程没有预定义的流程——不是我在代码里写"先搜再读再答"，是模型自己判断需要搜索，搜完觉得不够又换了个角度搜了一次。
 
@@ -26,7 +23,7 @@
 
 > "用 Python 生成一个 2020-2025 年全球 AI 投资额的可视化图表"
 
-![代码执行+可视化](https://p0-xtjj-private.juejin.cn/tos-cn-i-73owjymdk6/64be831454c84f2fa11fdbc013059630~tplv-73owjymdk6-jj-mark-v1:0:0:0:0:5o6Y6YeR5oqA5pyv56S-5Yy6IEAgcGlnbGV0MTIxMzg=:q75.awebp?policy=eyJ2bSI6MywidWlkIjoiMzE1OTM3NzI3OTE5MDIxOCJ9&rk3s=e9ecf3d6&x-orig-authkey=f32326d3454f2ac7e96d3d06cdbb035152127018&x-orig-expires=1778324198&x-orig-sign=y88jMGaMVdrxIkD3xmxal4Xy8Uw%3D)
+![代码执行+可视化](demo-pic/3.png)
 
 这个过程挺有意思。模型先搜了真实数据，然后试着用 Python 画图，发现环境里没有 matplotlib，就自己换了方案用 HTML + Chart.js 做了一个交互式图表。截图里那个"执行出错"就是它第一次尝试失败的记录。
 
@@ -34,23 +31,17 @@
 
 > "帮我写一份「从零搭建个人 AI 助手」的技术博客，要有架构图和代码示例"
 
-![文档生成+交互](https://p0-xtjj-private.juejin.cn/tos-cn-i-73owjymdk6/42819725435a4fefa7e2dc136fbae151~tplv-73owjymdk6-jj-mark-v1:0:0:0:0:5o6Y6YeR5oqA5pyv56S-5Yy6IEAgcGlnbGV0MTIxMzg=:q75.awebp?policy=eyJ2bSI6MywidWlkIjoiMzE1OTM3NzI3OTE5MDIxOCJ9&rk3s=e9ecf3d6&x-orig-authkey=f32326d3454f2ac7e96d3d06cdbb035152127018&x-orig-expires=1778324198&x-orig-sign=QvQ0DHqKOGjBYu9LEbp8J90VqpM%3D)
+![文档生成+交互](demo-pic/4.png)
 
 模型没有直接开写。它先反问了几个问题——目标读者是谁、技术栈偏好、篇幅和深度。这些问题以可点击的选项卡形式呈现，选完之后才开始生成。
 
 这个行为是模型自己产生的，我没有在 prompt 里写"遇到模糊需求要先提问"。
 
-### 交互式选项
-
-![交互式选项](https://p0-xtjj-private.juejin.cn/tos-cn-i-73owjymdk6/72bd3df8f1b04ae6ad2445369dd763f2~tplv-73owjymdk6-jj-mark-v1:0:0:0:0:5o6Y6YeR5oqA5pyv56S-5Yy6IEAgcGlnbGV0MTIxMzg=:q75.awebp?policy=eyJ2bSI6MywidWlkIjoiMzE1OTM3NzI3OTE5MDIxOCJ9&rk3s=e9ecf3d6&x-orig-authkey=f32326d3454f2ac7e96d3d06cdbb035152127018&x-orig-expires=1778324198&x-orig-sign=bRJA2onVN6xf98K%2Bz2NGZ0jr8Tc%3D)
-
-模型可以生成结构化的选项卡，用户点选后自动提交。这让对话从"我说你听"变成了双向协作——模型主动引导用户明确需求，而不是猜。
-
 ### 61 页白皮书
 
 > "写一个完整的 AI 行业白皮书"
 
-![长文档生成](https://p0-xtjj-private.juejin.cn/tos-cn-i-73owjymdk6/67217ecb818d45ae9060cd3362ce8d7e~tplv-73owjymdk6-jj-mark-v1:0:0:0:0:5o6Y6YeR5oqA5pyv56S-5Yy6IEAgcGlnbGV0MTIxMzg=:q75.awebp?policy=eyJ2bSI6MywidWlkIjoiMzE1OTM3NzI3OTE5MDIxOCJ9&rk3s=e9ecf3d6&x-orig-authkey=f32326d3454f2ac7e96d3d06cdbb035152127018&x-orig-expires=1778324198&x-orig-sign=pefHwi9vV4CEEyilREIsQt4FDC4%3D)
+![长文档生成](demo-pic/6.png)
 
 这个功能是多个子 Agent 并行写各章节，最后汇编成完整文档。15 章，61 页，右侧可以预览和下载 DOCX。老实说这个功能还不太稳定，偶尔会卡住，但跑通的时候效果不错。
 
@@ -114,4 +105,4 @@ npm start             # → http://localhost:3040
 
 如果你对"用最简单的方式实现 Agent"这个思路感兴趣，欢迎试用和提 Issue。觉得有用的话给个 Star，谢谢。
 
-GitHub: <https://github.com/piglet12138/claude-ai-harness>
+GitHub: https://github.com/piglet12138/claude-ai-harness

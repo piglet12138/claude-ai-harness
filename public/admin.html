@@ -44,7 +44,7 @@ tr:hover td { background: #fdfcfa; }
 .actions { display: flex; gap: 6px; }
 
 /* Form */
-.form-row { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+.form-row { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
 .form-row input, .form-row select { padding: 8px 12px; border: 1px solid #e0dbd4; border-radius: 6px; font-size: 14px; }
 .form-row input { flex: 1; min-width: 150px; }
 
@@ -52,6 +52,17 @@ tr:hover td { background: #fdfcfa; }
 .report-card { background: #fff; padding: 16px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #f0ebe4; }
 .report-meta { font-size: 12px; color: #6d6054; margin-bottom: 8px; }
 .report-text { font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+
+/* Conversations */
+.conv-row { cursor: pointer; }
+.conv-row:hover td { background: #faf5f0; }
+.conv-detail { background: #fff; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); padding: 20px; margin-bottom: 20px; }
+.conv-detail-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #f0ebe4; }
+.conv-detail-header h3 { font-size: 16px; }
+.msg-bubble { margin-bottom: 12px; padding: 12px 16px; border-radius: 10px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto; }
+.msg-user { background: #f0ebe4; margin-left: 40px; }
+.msg-assistant { background: #e8f0e8; margin-right: 40px; }
+.msg-role { font-size: 12px; font-weight: 600; color: #6d6054; margin-bottom: 4px; }
 
 .empty { text-align: center; padding: 40px; color: #9c9083; }
 .toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; background: #2d6a2d; color: #fff; border-radius: 8px; font-size: 14px; z-index: 100; display: none; }
@@ -62,12 +73,13 @@ tr:hover td { background: #fdfcfa; }
 <div class="container">
   <header>
     <h1>管理后台</h1>
-    <a href="/app" class="back">← 返回应用</a>
+    <a href="/app" class="back">&larr; 返回应用</a>
   </header>
 
   <div class="tabs">
     <button class="tab active" data-tab="users">用户管理</button>
     <button class="tab" data-tab="usage">用量统计</button>
+    <button class="tab" data-tab="data">数据导出</button>
     <button class="tab" data-tab="bugs">Bug 反馈</button>
   </div>
 
@@ -90,6 +102,20 @@ tr:hover td { background: #fdfcfa; }
     <table>
       <thead><tr><th>用户</th><th>总请求</th><th>输入 Token</th><th>输出 Token</th><th>最后活跃</th></tr></thead>
       <tbody id="usageTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Data Export Section -->
+  <div class="section" id="sec-data">
+    <div id="dataStats" style="margin-bottom:20px"></div>
+    <div class="form-row">
+      <button class="btn btn-primary" onclick="exportTelemetry()">导出 Agent 调用数据 (JSON)</button>
+      <button class="btn" onclick="exportRatings()">导出用户打标数据</button>
+      <button class="btn" onclick="exportConversations()">导出全部对话</button>
+    </div>
+    <table>
+      <thead><tr><th>时间</th><th>用户</th><th>工具调用</th><th>输入/输出 Token</th><th>耗时</th><th>轮次</th></tr></thead>
+      <tbody id="telemetryTable"></tbody>
     </table>
   </div>
 
@@ -202,6 +228,76 @@ async function loadUsage() {
   } catch (e) { console.warn(e); }
 }
 
+// ── Data Export ──
+async function loadTelemetry() {
+  try {
+    const data = await api('/api/admin/telemetry');
+    const s = data.stats || {};
+    const fmt = n => n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(1) + 'K' : String(n || 0);
+    $('#dataStats').innerHTML = `
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div class="report-card" style="flex:1;min-width:120px;text-align:center"><div style="font-size:24px;font-weight:600">${s.total_chats || 0}</div><div style="font-size:12px;color:#6d6054">总对话数</div></div>
+        <div class="report-card" style="flex:1;min-width:120px;text-align:center"><div style="font-size:24px;font-weight:600">${fmt(s.total_input)}</div><div style="font-size:12px;color:#6d6054">总输入 Token</div></div>
+        <div class="report-card" style="flex:1;min-width:120px;text-align:center"><div style="font-size:24px;font-weight:600">${fmt(s.total_output)}</div><div style="font-size:12px;color:#6d6054">总输出 Token</div></div>
+        <div class="report-card" style="flex:1;min-width:120px;text-align:center"><div style="font-size:24px;font-weight:600">${s.avg_latency_ms ? (s.avg_latency_ms / 1000).toFixed(1) + 's' : '-'}</div><div style="font-size:12px;color:#6d6054">平均耗时</div></div>
+        <div class="report-card" style="flex:1;min-width:120px;text-align:center"><div style="font-size:24px;font-weight:600">${s.total_tool_calls || 0}</div><div style="font-size:12px;color:#6d6054">总工具调用</div></div>
+      </div>`;
+    const list = data.telemetry || [];
+    const tbody = $('#telemetryTable');
+    if (!list.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无数据（新对话后会自动记录）</td></tr>'; return; }
+    tbody.innerHTML = list.slice(0, 100).map(t => {
+      const tools = (t.tool_calls || []).join(', ') || '-';
+      return `<tr>
+        <td style="white-space:nowrap">${t.created_at || '-'}</td>
+        <td>${esc(t.email || t.user_id || '-')}</td>
+        <td style="font-size:12px">${esc(tools)}</td>
+        <td>${fmt(t.input_tokens)} / ${fmt(t.output_tokens)}</td>
+        <td>${t.latency_ms ? (t.latency_ms / 1000).toFixed(1) + 's' : '-'}</td>
+        <td>${t.rounds}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) { console.warn(e); }
+}
+
+async function exportTelemetry() {
+  try {
+    const data = await api('/api/admin/telemetry');
+    downloadJSON(data.telemetry || [], 'telemetry-' + new Date().toISOString().slice(0,10) + '.json');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function exportRatings() {
+  try {
+    const data = await api('/api/admin/ratings');
+    downloadJSON(data.ratings || [], 'ratings-' + new Date().toISOString().slice(0,10) + '.json');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function exportConversations() {
+  try {
+    toast('正在导出对话...');
+    const threads = await api('/api/admin/conversations');
+    const result = [];
+    for (const c of threads) {
+      try {
+        const data = await api('/api/admin/conversations/' + c.id);
+        result.push({ thread: { id: c.id, email: c.email, title: c.title, created_at: c.created_at, updated_at: c.updated_at }, messages: data.messages, ratings: data.ratings });
+      } catch {}
+    }
+    downloadJSON(result, 'conversations-' + new Date().toISOString().slice(0,10) + '.json');
+  } catch (e) { toast(e.message, true); }
+}
+
+function downloadJSON(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('已导出 ' + filename);
+}
+
 // ── Bug Reports ──
 async function loadBugs() {
   try {
@@ -223,6 +319,7 @@ function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'
 // Init
 loadUsers();
 loadUsage();
+loadTelemetry();
 loadBugs();
 </script>
 </body>
