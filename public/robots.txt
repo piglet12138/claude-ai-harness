@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin.html
+Disallow: /app.html
+
+Sitemap: https://claude.yaoyuheng2001.me/sitemap.xml

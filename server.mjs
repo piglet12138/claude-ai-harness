@@ -2,11 +2,13 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { tmpdir } from "node:os";
+import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
-import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport } from "./db.mjs";
+import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage, dbRatings, dbPv, dbTelemetry } from "./db.mjs";
 const XLSX = require("xlsx");
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TableRow, TableCell, Table, WidthType, BorderStyle, PageBreak } = require("docx");
 
@@ -15,19 +17,52 @@ const publicDir = path.join(root, "public");
 
 // Temporary share links (in-memory, expire after 24h)
 const shareStore = new Map();
+// Generated file store (metadata persisted as .meta.json sidecar files)
+const fileStore = new Map();
+const FILES_DIR = path.join(root, ".generated-files");
+await mkdir(FILES_DIR, { recursive: true }).catch(() => {});
+// Restore fileStore from sidecar metadata on startup
+try {
+  const entries = await fs.readdir(FILES_DIR);
+  for (const f of entries) {
+    if (!f.endsWith(".meta.json")) continue;
+    try {
+      const meta = JSON.parse(await fs.readFile(path.join(FILES_DIR, f), "utf8"));
+      if (Date.now() > meta.expires) {
+        fs.unlink(path.join(FILES_DIR, f)).catch(() => {});
+        fs.unlink(meta.filePath).catch(() => {});
+      } else {
+        fileStore.set(meta.id, meta);
+      }
+    } catch {}
+  }
+  if (fileStore.size) console.log(`[Files] Restored ${fileStore.size} file(s) from disk`);
+} catch {}
+// Long document background jobs (in-memory, expire after 2h)
+const longDocJobs = new Map();
 setInterval(() => {
   const now = Date.now();
   for (const [id, entry] of shareStore) {
     if (now > entry.expires) shareStore.delete(id);
   }
+  for (const [id, entry] of fileStore) {
+    if (now > entry.expires) {
+      fs.unlink(entry.filePath).catch(() => {});
+      fs.unlink(path.join(FILES_DIR, `${id}.meta.json`)).catch(() => {});
+      fileStore.delete(id);
+    }
+  }
+  for (const [id, job] of longDocJobs) {
+    if (now - job.createdAt > 7200_000) longDocJobs.delete(id);
+  }
 }, 3600_000);
 const env = await loadEnv(path.join(root, ".env"));
 const port = Number(env.PORT || process.env.PORT || 3040);
-const baseUrl = process.env.LUCKY_BASE_URL || env.LUCKY_BASE_URL || "https://luckyapi.chat/v1";
-const apiKey = process.env.LUCKY_API_KEY || env.LUCKY_API_KEY;
+const baseUrl = process.env.ANTHROPIC_BASE_URL || env.ANTHROPIC_BASE_URL || "https://api.anthropic.com/v1";
+const apiKey = process.env.ANTHROPIC_API_KEY || env.ANTHROPIC_API_KEY;
 const model = process.env.MODEL || env.MODEL || "claude-opus-4-7";
-const accessEmail = process.env.ACCESS_EMAIL || env.ACCESS_EMAIL || "i@i.io";
-const accessPassword = process.env.ACCESS_PASSWORD || env.ACCESS_PASSWORD || "iiiiiiii";
+const accessEmail = process.env.ACCESS_EMAIL || env.ACCESS_EMAIL;
+const accessPassword = process.env.ACCESS_PASSWORD || env.ACCESS_PASSWORD;
 const sessionSecret = process.env.SESSION_SECRET || env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 const braveApiKey = process.env.BRAVE_SEARCH_API_KEY || env.BRAVE_SEARCH_API_KEY;
 const serperApiKey = process.env.SERPER_API_KEY || env.SERPER_API_KEY || "";
@@ -43,6 +78,31 @@ const googleRedirectUri = process.env.GOOGLE_REDIRECT_URI || env.GOOGLE_REDIRECT
 const googleTokenFile = path.resolve(root, process.env.GOOGLE_TOKEN_FILE || env.GOOGLE_TOKEN_FILE || ".google-token.json");
 const googleScopes = ["https://www.googleapis.com/auth/drive.file"];
 const googleOauthStates = new Map();
+
+// Email notifications via Resend (for bug reports)
+const resendApiKey = process.env.RESEND_API_KEY || env.RESEND_API_KEY || "";
+const notifyEmails = (process.env.NOTIFY_EMAILS || env.NOTIFY_EMAILS || "").split(",").map(s => s.trim()).filter(Boolean);
+
+async function sendNotifyEmail(subject, text, html) {
+  if (!resendApiKey || !notifyEmails.length) return;
+  try {
+    const payload = {
+      from: "Claude Lite <noreply@yaoyuheng2001.me>",
+      to: notifyEmails,
+      subject,
+    };
+    if (html) payload.html = html; else payload.text = text;
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${resendApiKey}` },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    console.log(`[Email] ${resp.ok ? "Sent" : "Failed"}: ${subject}`, resp.ok ? "" : JSON.stringify(data));
+  } catch (e) {
+    console.error("[Email] Error:", e.message);
+  }
+}
 // Global crash protection
 process.on("uncaughtException", (err) => {
   console.error("[FATAL] Uncaught exception:", err.message, err.stack?.split("\n").slice(0, 3).join("\n"));
@@ -69,9 +129,17 @@ const agenticSystemPrompt = [
   "工具说明：",
   "- web_search：搜索互联网，返回摘要+自动抓取的全文。用精确关键词，不要整句搜索。",
   "- fetch_url：读取指定 URL 全文。用于深入阅读搜索结果或用户给的链接。",
-  "- run_code：执行 JavaScript/Python 代码。用于计算、数据处理、验证。",
-  "- generate_long_document：仅在用户明确要求 20 页以上长文档时使用。",
-  "- create_artifact：创建文档/网页/代码，显示在右侧面板。",
+  "- run_code：执行 JavaScript/Python 代码。用于计算、数据处理、验证、**生成 Office 文件**。",
+  "  生成的 .docx/.xlsx/.pptx/.pdf/.csv 文件会自动被捕获并提供下载链接。",
+  "  **重要：文件必须保存在当前目录，只写文件名，不要用绝对路径。** 如 'report.docx' 而非 '/tmp/report.docx'。",
+  "- generate_long_document：生成长篇报告/白皮书/论文。多个子Agent并行撰写，支持50-100页。",
+  "- create_artifact：创建普通文档/网页/代码，显示在右侧面板。适合10页以内的内容。",
+  "",
+  "## 何时用 generate_long_document vs create_artifact（严格遵守）",
+  "- 用户要求「完整报告」「全景报告」「白皮书」「详细文档」「至少X页」「长文档」→ **必须用 generate_long_document**",
+  "- 用户要求 20 页以上、或明确说「完整」「全面」「详细」「深度」→ **必须用 generate_long_document**",
+  "- 普通博客、短文档、代码、网页 → 用 create_artifact",
+  "- **绝对不要**用 create_artifact 来生成需要 20 页以上的内容，它无法生成那么长的文档",
   "",
   "## create_artifact 规则",
   "1. 聊天中只用 1-2 句话说明意图",
@@ -79,7 +147,7 @@ const agenticSystemPrompt = [
   "3. 之后用 1 句话收尾",
   "4. 绝不在聊天正文中写出文档全文内容",
   "",
-  "必须用 create_artifact：写文档/报告/方案/邮件、做网页/可视化、写代码文件。",
+  "必须用 create_artifact：写文档/报告/方案/邮件、做网页/可视化、写代码文件（10页以内）。",
   "不用：普通问答、短回复、简单列表。",
   "",
   "## 交互式选项",
@@ -108,6 +176,74 @@ const agenticSystemPrompt = [
   '["问题1", "问题2", "问题3"]',
   "<</suggestions>>",
   "规则：具体、有价值、20字以内。简单闲聊可以不加。",
+  "",
+  "## 生成 Office 文件（run_code 高级用法）",
+  "",
+  "当用户要求生成可下载的 Word/Excel/PPT/PDF 文件时，用 run_code 执行代码生成文件。",
+  "文件保存在当前目录即可，系统会自动捕获并提供下载链接。",
+  "",
+  "### DOCX (Word) — JavaScript, 用 docx 库",
+  "```javascript",
+  'const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell,',
+  '  AlignmentType, WidthType, BorderStyle, PageBreak, Header, Footer, PageNumber,',
+  '  ImageRun, ExternalHyperlink, LevelFormat, ShadingType } = require("docx");',
+  'const fs = require("fs");',
+  "const doc = new Document({",
+  "  styles: { default: { document: { run: { font: 'Arial', size: 24 } } } },",
+  "  sections: [{ properties: { page: { size: { width: 12240, height: 15840 }, margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 } } },",
+  "    children: [ new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun('Title')] }) ] }]",
+  "});",
+  'Packer.toBuffer(doc).then(buf => fs.writeFileSync("output.docx", buf));',
+  "```",
+  "要点：页面默认A4，美国信纸用 12240x15840 DXA；用 LevelFormat.BULLET 做列表，不要用 unicode 符号；",
+  "表格必须设 columnWidths + cell width，用 WidthType.DXA；图片需要 type 参数。",
+  "",
+  "### XLSX (Excel) — Python, 用 openpyxl",
+  "```python",
+  "from openpyxl import Workbook",
+  "from openpyxl.styles import Font, PatternFill, Alignment",
+  "wb = Workbook()",
+  "ws = wb.active",
+  "ws.title = 'Sheet1'",
+  "ws['A1'] = 'Header'",
+  "ws['A1'].font = Font(bold=True)",
+  "ws.column_dimensions['A'].width = 20",
+  "ws['B2'] = '=SUM(B3:B10)'  # 用公式，不要硬编码计算值",
+  "wb.save('output.xlsx')",
+  "```",
+  "要点：用 Excel 公式而非 Python 计算硬编码；openpyxl 的行列从 1 开始。",
+  "",
+  "### PPTX (PowerPoint) — JavaScript, 用 pptxgenjs",
+  "```javascript",
+  'const PptxGenJS = require("pptxgenjs");',
+  "const pptx = new PptxGenJS();",
+  "pptx.layout = 'LAYOUT_16x9';",
+  "let slide = pptx.addSlide();",
+  "slide.addText('Title', { x: 0.5, y: 0.5, w: 9, h: 1.5, fontSize: 36, bold: true, color: '1E2761' });",
+  "slide.addText('Body text', { x: 0.5, y: 2.5, w: 9, h: 3, fontSize: 16 });",
+  "// 支持: addImage, addChart, addTable, addShape",
+  "pptx.writeFile({ fileName: 'output.pptx' });",
+  "```",
+  "要点：坐标单位是英寸；选用大胆配色，不要白底黑字；每页都要有视觉元素。",
+  "",
+  "### PDF — Python, 用 reportlab",
+  "```python",
+  "from reportlab.lib.pagesizes import letter",
+  "from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer",
+  "from reportlab.lib.styles import getSampleStyleSheet",
+  "doc = SimpleDocTemplate('output.pdf', pagesize=letter)",
+  "styles = getSampleStyleSheet()",
+  "story = [Paragraph('Title', styles['Title']), Spacer(1,12), Paragraph('Content', styles['Normal'])]",
+  "doc.build(story)",
+  "```",
+  "要点：不要用 unicode 上下标（会变黑块），用 <sub>/<super> 标签。",
+  "",
+  "### 选择指南",
+  "- 用户说「Word文档」「docx」→ 用 docx (JS)",
+  "- 用户说「Excel」「表格文件」「xlsx」→ 用 openpyxl (Python)",
+  "- 用户说「PPT」「幻灯片」「演示文稿」「pptx」→ 用 pptxgenjs (JS)",
+  "- 用户说「PDF」→ 用 reportlab (Python)",
+  "- 不确定格式时，优先用 create_artifact 生成 HTML 文档（可在线预览）",
 ].join("\n");
 
 const anthropicTools = [
@@ -135,7 +271,7 @@ const anthropicTools = [
   },
   {
     name: "run_code",
-    description: "Execute JavaScript or Python code in a sandboxed environment. Use for calculations, data processing, generating outputs, or demonstrating code. Returns stdout/stderr output.",
+    description: "Execute JavaScript or Python code. Use for calculations, data processing, generating charts, or demonstrating code. Python has numpy, pandas, matplotlib, openpyxl, reportlab available. JavaScript has docx, pptxgenjs available via require(). Generated files (.docx, .xlsx, .pptx, .pdf, .csv) are auto-captured and provided as download links. Matplotlib charts are auto-captured as inline images.",
     input_schema: {
       type: "object",
       properties: {
@@ -177,23 +313,61 @@ const anthropicTools = [
 ];
 const apiEndpoint = `${baseUrl.replace(/\/v1\/?$/, "")}/v1/messages`;
 
-// Sub-agent key pool (for parallel chapter generation only; main chat uses apiKey)
-const subAgentKeys = [
-  "sk-CPxTJzGwYsIJNbLwYFb9PVutcfVYqxPqVquDXzNX1x8xoVZK",
-  "sk-271gcSzCYCEfEPzWVj142H5z6hmdrrURPP1sFEOWlvhVAtQh",
-  "sk-v3QFYug0GdOWlsfGgfIK5AOo5MOirIGfzEEFbGbXXgbV4hgS",
-  "sk-o2xdRSW8WEpJTXA9skDZZnT8IzG5wXVTvooIivustgxrCAAI",
-  "sk-W8u7rTLwArVrrV6ZKV2G08pvjUZx49vFm4XaqQMCpNF9OhXX",
-];
-let subAgentKeyIndex = 0;
-function nextSubAgentKey() {
-  const key = subAgentKeys[subAgentKeyIndex % subAgentKeys.length];
-  subAgentKeyIndex++;
-  return key;
+// ---------------------------------------------------------------------------
+// API Key Pool — round-robin with temporary cooldown on failure
+// ---------------------------------------------------------------------------
+// Keys from .env: ANTHROPIC_API_KEY is the primary, SUB_AGENT_KEYS is comma-separated extras
+const allApiKeys = [
+  apiKey,
+  ...(process.env.SUB_AGENT_KEYS || env.SUB_AGENT_KEYS || "")
+    .split(",").map(k => k.trim()).filter(Boolean),
+].filter(Boolean);
+const keyCooldowns = new Map(); // key -> cooldownUntil timestamp
+const COOLDOWN_MS = 3 * 60_000; // 3 minutes cooldown after failure
+let keyIndex = 0;
+
+function pickKey(preferSub = false) {
+  const now = Date.now();
+  // If preferSub and we have >1 key, start from index 1 to skip primary
+  const startOffset = (preferSub && allApiKeys.length > 1) ? 1 : 0;
+  // Try all keys, starting from current index
+  for (let i = 0; i < allApiKeys.length; i++) {
+    const idx = (keyIndex + startOffset + i) % allApiKeys.length;
+    const key = allApiKeys[idx];
+    const coolUntil = keyCooldowns.get(key) || 0;
+    if (now >= coolUntil) {
+      keyIndex = idx + 1; // advance for next call
+      return key;
+    }
+  }
+  // All keys on cooldown — use the one that cools down soonest
+  let bestKey = allApiKeys[0], bestTime = Infinity;
+  for (const key of allApiKeys) {
+    const t = keyCooldowns.get(key) || 0;
+    if (t < bestTime) { bestTime = t; bestKey = key; }
+  }
+  console.log(`[KeyPool] All keys on cooldown, using least-cooled key (wait ${Math.round((bestTime - now) / 1000)}s)`);
+  return bestKey;
 }
 
+function markKeyFailed(key, statusCode) {
+  const cooldown = statusCode === 429 ? COOLDOWN_MS : COOLDOWN_MS * 2; // rate limit: 3min, balance/other: 6min
+  keyCooldowns.set(key, Date.now() + cooldown);
+  const masked = key.slice(0, 6) + "..." + key.slice(-4);
+  console.log(`[KeyPool] Key ${masked} cooled down for ${cooldown / 1000}s (HTTP ${statusCode}), ${allApiKeys.length - [...keyCooldowns.values()].filter(t => t > Date.now()).length}/${allApiKeys.length} keys available`);
+}
+
+function markKeyOk(key) {
+  keyCooldowns.delete(key); // clear cooldown on success
+}
+
+console.log(`[KeyPool] Loaded ${allApiKeys.length} API key(s)`);
+
 if (!apiKey) {
-  throw new Error("LUCKY_API_KEY is required");
+  throw new Error("ANTHROPIC_API_KEY is required. Set it in .env or as an environment variable.");
+}
+if (!accessEmail || !accessPassword) {
+  throw new Error("ACCESS_EMAIL and ACCESS_PASSWORD are required. Set them in .env or as environment variables.");
 }
 
 // ---------------------------------------------------------------------------
@@ -279,6 +453,48 @@ const server = http.createServer(async (req, res) => {
       const session = readSession(req);
       if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
       return json(res, dbUsers.list());
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/admin/users") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      const body = await readJson(req, 32 * 1024);
+      const email = String(body?.email || "").trim().toLowerCase();
+      const password = String(body?.password || "");
+      const role = body?.role === "admin" ? "admin" : "user";
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, { error: "邮箱格式不正确" }, 400);
+      if (password.length < 6) return json(res, { error: "密码至少 6 位" }, 400);
+      if (dbUsers.getByEmail(email)) return json(res, { error: "该邮箱已注册" }, 409);
+      const salt = crypto.randomBytes(16).toString("hex");
+      const id = crypto.randomUUID();
+      dbUsers.create(id, email, hashPwd(password, salt), salt, role);
+      return json(res, { ok: true, id, email, role });
+    }
+
+    if (url.pathname.startsWith("/api/admin/users/") && url.pathname.split("/").length === 5) {
+      const userId = url.pathname.split("/")[4];
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+
+      if (req.method === "PATCH") {
+        const body = await readJson(req, 32 * 1024);
+        if (body.role) {
+          const newRole = body.role === "admin" ? "admin" : "user";
+          dbUsers.updateRole(userId, newRole);
+        }
+        if (body.password) {
+          if (body.password.length < 6) return json(res, { error: "密码至少 6 位" }, 400);
+          const salt = crypto.randomBytes(16).toString("hex");
+          dbUsers.updatePassword(userId, hashPwd(body.password, salt), salt);
+        }
+        return json(res, { ok: true });
+      }
+
+      if (req.method === "DELETE") {
+        if (userId === session.userId) return json(res, { error: "不能删除自己" }, 400);
+        dbUsers.delete(userId);
+        return json(res, { ok: true });
+      }
     }
 
     // =========================================================================
@@ -408,15 +624,53 @@ const server = http.createServer(async (req, res) => {
         if (req.method === "POST" && url.pathname === "/api/bug-report") {
       const session = readSession(req);
       if (!session) return json(res, { error: "Unauthorized" }, 401);
-      const body = await readJson(req, 64 * 1024);
+      const body = await readJson(req, 10 * 1024 * 1024); // 10MB for images
       const text = String(body?.text || "").trim().slice(0, 2000);
-      if (!text) return json(res, { error: "内容不能为空" }, 400);
+      const rawImages = Array.isArray(body?.images) ? body.images.slice(0, 5) : [];
+      if (!text && !rawImages.length) return json(res, { error: "内容不能为空" }, 400);
+      // Save images to disk, store paths in report
+      const imgDir = path.join(root, "bug-images");
+      await fs.mkdir(imgDir, { recursive: true });
+      const imagePaths = [];
+      for (const dataUrl of rawImages) {
+        if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) continue;
+        const match = dataUrl.match(/^data:image\/(\w+);base64,(.+)$/);
+        if (!match) continue;
+        const ext = match[1] === "jpeg" ? "jpg" : match[1];
+        const fname = `${crypto.randomBytes(8).toString("hex")}.${ext}`;
+        await fs.writeFile(path.join(imgDir, fname), Buffer.from(match[2], "base64"));
+        imagePaths.push(`/bug-images/${fname}`);
+      }
       const reportsFile = path.join(root, "bug-reports.json");
       let reports = [];
       try { reports = JSON.parse(await fs.readFile(reportsFile, "utf8")); } catch {}
-      reports.push({ id: crypto.randomUUID(), email: session.email, text, userAgent: String(req.headers["user-agent"] || "").slice(0, 200), createdAt: new Date().toISOString() });
+      reports.push({ id: crypto.randomUUID(), email: session.email, text, images: imagePaths, userAgent: String(req.headers["user-agent"] || "").slice(0, 200), createdAt: new Date().toISOString() });
       await fs.writeFile(reportsFile, JSON.stringify(reports, null, 2), "utf8");
+      // Send email notification with images (non-blocking)
+      const siteUrl = `https://claude.yaoyuheng2001.me`;
+      const imgsHtml = imagePaths.map(p => `<p><img src="${siteUrl}${p}" style="max-width:600px;border-radius:8px;border:1px solid #ddd" /></p>`).join("");
+      sendNotifyEmail(
+        `[Bug Report] ${text.slice(0, 50)}`,
+        null,
+        `<div style="font-family:sans-serif;max-width:640px"><p style="color:#666">From: ${session.email}</p><p style="white-space:pre-wrap;line-height:1.6">${text.replace(/</g,"&lt;")}</p>${imgsHtml}<hr style="border:none;border-top:1px solid #eee;margin:20px 0"><p style="font-size:12px;color:#999"><a href="${siteUrl}/admin">管理后台</a></p></div>`
+      ).catch(() => {});
       return json(res, { ok: true });
+    }
+
+    // Usage stats — user sees own, admin sees all
+    if (req.method === "GET" && url.pathname === "/api/usage") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const today = dbUsage.userToday(session.userId);
+      const total = dbUsage.userAll(session.userId);
+      const daily = dbUsage.userDaily(session.userId);
+      return json(res, { today, total, daily });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/usage") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      return json(res, dbUsage.allSummary());
     }
 
     if (req.method === "GET" && url.pathname === "/api/admin/bug-reports") {
@@ -426,6 +680,68 @@ const server = http.createServer(async (req, res) => {
       let reports = [];
       try { reports = JSON.parse(await fs.readFile(reportsFile, "utf8")); } catch {}
       return json(res, reports.reverse());
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/conversations") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      return json(res, dbThreads.listAll());
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/admin/conversations/")) {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      const threadId = url.pathname.split("/")[4];
+      const thread = dbThreads.getById(threadId);
+      if (!thread) return json(res, { error: "Not found" }, 404);
+      const messages = dbMessages.list(threadId);
+      const ratings = dbRatings.getThreadRatings(threadId);
+      return json(res, { thread, messages, ratings });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/ratings") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      return json(res, { ratings: dbRatings.all(), stats: dbRatings.stats() });
+    }
+
+    // User-facing rating API
+    if (req.method === "POST" && url.pathname.startsWith("/api/messages/") && url.pathname.endsWith("/rate")) {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const parts = url.pathname.split("/");
+      const messageId = parts[3];
+      const body = await readJson(req, 1024);
+      const rating = body?.rating;
+      if (rating !== 1 && rating !== -1) return json(res, { error: "rating must be 1 or -1" }, 400);
+      const threadId = body?.thread_id;
+      if (!threadId) return json(res, { error: "thread_id required" }, 400);
+      dbRatings.upsert(messageId, threadId, session.userId, rating);
+      return json(res, { ok: true });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/ratings") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const threadId = url.searchParams.get("thread_id");
+      if (!threadId) return json(res, { error: "thread_id required" }, 400);
+      return json(res, dbRatings.getThreadRatings(threadId));
+    }
+
+    // Analytics: PV tracking
+    if (req.method === "POST" && url.pathname === "/api/analytics/pv") {
+      try {
+        const body = await readJson(req, 4096);
+        dbPv.record(body?.path || "", body?.referrer || "", body?.screen || "", body?.fp || "");
+      } catch {}
+      return json(res, { ok: true });
+    }
+
+    // Admin: telemetry export
+    if (req.method === "GET" && url.pathname === "/api/admin/telemetry") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") return json(res, { error: "Forbidden" }, 403);
+      return json(res, { telemetry: dbTelemetry.all(), stats: dbTelemetry.stats() });
     }
 
     if (req.method === "POST" && url.pathname === "/api/import-docx") {
@@ -453,11 +769,49 @@ const server = http.createServer(async (req, res) => {
       return uploadGoogleDoc(res, body);
     }
 
+    // ── Long doc job status (disconnect recovery) ──
+    if (req.method === "GET" && url.pathname.match(/^\/api\/job\/[^/]+$/)) {
+      if (!readSession(req)) return json(res, { error: "Unauthorized" }, 401);
+      const jobId = url.pathname.split("/")[3];
+      const job = longDocJobs.get(jobId);
+      if (!job) return json(res, { error: "Job not found" }, 404);
+      // Return progress since a given index (for incremental polling)
+      const since = Number(url.searchParams?.get("since") || 0);
+      return json(res, {
+        id: job.id,
+        status: job.status,
+        progress: job.progress.slice(since),
+        progressTotal: job.progress.length,
+        artifact: job.status === "completed" ? job.artifact : null,
+        error: job.error,
+      });
+    }
+
     if (req.method === "POST" && url.pathname === "/api/search") {
       if (!readSession(req)) return json(res, { error: "Unauthorized" }, 401);
       const body = await readJson(req, 32 * 1024);
       const results = await multiSearch(body?.query);
       return json(res, { results });
+    }
+
+    // ── Files: download generated file ──
+    if (req.method === "GET" && url.pathname.startsWith("/api/files/")) {
+      const fileId = url.pathname.slice("/api/files/".length);
+      const entry = fileStore.get(fileId);
+      if (!entry) { res.writeHead(404); res.end("File not found or expired"); return; }
+      try {
+        const data = await fs.readFile(entry.filePath);
+        const safeName = encodeURIComponent(entry.fileName);
+        res.writeHead(200, {
+          "content-type": entry.mime,
+          "content-disposition": `attachment; filename*=UTF-8''${safeName}`,
+          "content-length": data.length,
+        });
+        res.end(data);
+      } catch {
+        res.writeHead(410); res.end("File no longer available");
+      }
+      return;
     }
 
     // ── Share: create temporary link ──
@@ -503,6 +857,29 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/app") {
       return staticFile("/app.html", res);
+    }
+
+    if (req.method === "GET" && url.pathname === "/admin") {
+      const session = readSession(req);
+      if (!session || session.role !== "admin") {
+        res.writeHead(302, { Location: "/app" });
+        res.end();
+        return;
+      }
+      return staticFile("/admin.html", res);
+    }
+
+    // Serve bug report images (admin only in practice, but images are random-named)
+    if (req.method === "GET" && url.pathname.startsWith("/bug-images/")) {
+      const fname = path.basename(url.pathname);
+      const imgPath = path.join(root, "bug-images", fname);
+      try {
+        const data = await fs.readFile(imgPath);
+        const ext = path.extname(fname);
+        res.writeHead(200, { "content-type": mime[ext] || "image/png", "cache-control": "public, max-age=86400" });
+        res.end(data);
+        return;
+      } catch { return notFound(res); }
     }
 
     return staticFile(url.pathname, res);
@@ -659,6 +1036,7 @@ async function uploadGoogleDoc(res, body) {
 async function chat(req, res) {
   const body = await readJson(req, 50 * 1024 * 1024);
   const messages = Array.isArray(body?.messages) ? body.messages.slice(-24) : [];
+  const chatThreadId = body?.threadId || null; // for persisting artifacts to SQLite
   // Preprocess: extract text from binary file attachments (PDF, XLSX)
   for (const msg of messages) {
     if (!Array.isArray(msg.content)) continue;
@@ -696,11 +1074,16 @@ async function chat(req, res) {
   res.write(": stream\n\n");
 
   const MAX_ROUNDS = 8;
+  const chatStartTime = Date.now();
+  const collectedToolCalls = [];
 
   const TOKEN_BUDGET = 80000; // Conservative budget to leave room for response
+  let totalInputTokens = 0, totalOutputTokens = 0;
+  let totalRounds = 0;
 
   try {
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    totalRounds = round + 1;
     console.log(`[Chat] Round ${round} start, messages: ${apiMessages.length}, est tokens: ${estimateTokens(apiMessages)}`);
     const isLastRound = round === MAX_ROUNDS - 1;
     // Proactive context management: compress if approaching budget
@@ -760,9 +1143,12 @@ async function chat(req, res) {
             for (const tc of retryResult.toolUseBlocks) {
               res.write(`event: tool_start\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, args: toolDisplayArgs(tc.name, tc.input) })}\n\n`);
               console.log(`[Chat] Executing tool: ${tc.name}`);
+              collectedToolCalls.push(tc.name);
         const toolResult = await executeTool(tc.name, tc.input, res);
               if (tc.name === "create_artifact") {
-                res.write(`event: artifact\ndata: ${JSON.stringify({ title: tc.input.title || "Artifact", type: tc.input.type || "html", content: tc.input.content || "", language: tc.input.language || "", description: tc.input.description || "", file_path: tc.input.file_path || "" })}\n\n`);
+                const artifactDoc = { title: tc.input.title || "Artifact", type: tc.input.type || "html", content: tc.input.content || "", language: tc.input.language || "", description: tc.input.description || "", file_path: tc.input.file_path || "" };
+                if (chatThreadId) { try { dbDocuments.upsert(chatThreadId, { id: crypto.randomUUID(), ...artifactDoc }); } catch {} }
+                try { res.write(`event: artifact\ndata: ${JSON.stringify(artifactDoc)}\n\n`); } catch {}
               }
               res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary, sources: toolResult.sources || undefined })}\n\n`);
               res.flush?.();
@@ -781,7 +1167,9 @@ async function chat(req, res) {
       result.stopReason = result.toolUseBlocks?.length ? "tool_use" : "end_turn";
       console.log(`[Chat] Round ${round}: stopReason was empty, inferred as ${result.stopReason}`);
     }
-    console.log(`[Chat] Round ${round}: stream consumed, stopReason=${result.stopReason}, toolUse=${result.toolUseBlocks?.length || 0}`);
+    totalInputTokens += result.inputTokens || 0;
+    totalOutputTokens += result.outputTokens || 0;
+    console.log(`[Chat] Round ${round}: stream consumed, stopReason=${result.stopReason}, toolUse=${result.toolUseBlocks?.length || 0}, tokens: +${result.inputTokens}/${result.outputTokens}`);
 
     if (result.stopReason === "tool_use" && result.toolUseBlocks.length) {
       const allSearches = result.toolUseBlocks.every((t) => t.name === "web_search");
@@ -801,6 +1189,7 @@ async function chat(req, res) {
       const toolResultBlocks = [];
       let hasArtifact = false;
       for (const tc of result.toolUseBlocks) {
+        collectedToolCalls.push(tc.name);
         res.write(`event: tool_start\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, args: toolDisplayArgs(tc.name, tc.input) })}\n\n`);
         res.flush?.();
 
@@ -808,15 +1197,46 @@ async function chat(req, res) {
 
         if (tc.name === "create_artifact") {
           hasArtifact = true;
-          res.write(`event: artifact\ndata: ${JSON.stringify({
+          const artifactDoc = {
             title: tc.input.title || "Artifact",
             type: tc.input.type || "html",
             content: tc.input.content || "",
             language: tc.input.language || "",
             description: tc.input.description || "",
             file_path: tc.input.file_path || "",
-          })}\n\n`);
-          res.flush?.();
+          };
+          // Persist to SQLite immediately (survives client disconnect)
+          if (chatThreadId) {
+            try {
+              const docId = crypto.randomUUID();
+              dbDocuments.upsert(chatThreadId, { id: docId, ...artifactDoc });
+            } catch (e) { console.error("[Chat] Failed to persist artifact:", e.message); }
+          }
+          try {
+            res.write(`event: artifact\ndata: ${JSON.stringify(artifactDoc)}\n\n`);
+            res.flush?.();
+          } catch {}
+        }
+
+        // Emit generated files as file-type artifacts for document panel
+        if (tc.name === "run_code" && toolResult.codeResult?.files?.length) {
+          for (const f of toolResult.codeResult.files) {
+            const ext = f.name.split(".").pop().toLowerCase();
+            const artifactDoc = {
+              title: f.name,
+              type: "file",
+              content: "",
+              language: ext,
+              description: `${ext.toUpperCase()} 文件 · ${f.size > 1024 * 1024 ? (f.size / 1024 / 1024).toFixed(1) + " MB" : Math.round(f.size / 1024) + " KB"}`,
+              file_path: f.name,
+              fileId: f.id,
+              fileSize: f.size,
+            };
+            if (chatThreadId) {
+              try { dbDocuments.upsert(chatThreadId, { id: crypto.randomUUID(), ...artifactDoc }); } catch {}
+            }
+            try { res.write(`event: artifact\ndata: ${JSON.stringify(artifactDoc)}\n\n`); res.flush?.(); } catch {}
+          }
         }
 
         res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary, sources: toolResult.sources || undefined, codeResult: toolResult.codeResult || undefined })}\n\n`);
@@ -883,6 +1303,23 @@ async function chat(req, res) {
       res.write(`data: ${JSON.stringify({ delta: `\n\n---\n请求出错：${String(loopErr.message).slice(0, 200)}` })}\n\n`);
     } catch {}
   }
+  // Record usage + telemetry
+  const session = readSession(req);
+  const latencyMs = Date.now() - chatStartTime;
+  if (totalInputTokens || totalOutputTokens) {
+    if (session) {
+      try {
+        dbUsage.record(session.userId, totalInputTokens, totalOutputTokens, model);
+      } catch (e) { console.error("[Usage] Failed to record:", e.message); }
+    }
+    console.log(`[Chat] Total tokens: input=${totalInputTokens}, output=${totalOutputTokens}`);
+  }
+  // Telemetry: record tool calls, latency, message preview
+  try {
+    const lastUserMsg = messages.findLast(m => m.role === "user");
+    const preview = typeof lastUserMsg?.content === "string" ? lastUserMsg.content.slice(0, 2000) : "";
+    dbTelemetry.record(session?.userId || "", chatThreadId || "", collectedToolCalls, totalInputTokens, totalOutputTokens, latencyMs, preview, model, totalRounds);
+  } catch (e) { console.error("[Telemetry] Failed to record:", e.message); }
   try {
     res.write("event: done\ndata: {}\n\n");
     res.end();
@@ -949,6 +1386,7 @@ async function consumeAnthropicStream(body, res) {
   const allBlocks = [];     // complete content blocks for context
   let currentBlock = null;
   let stopReason = "";
+  let inputTokens = 0, outputTokens = 0;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -1001,8 +1439,16 @@ async function consumeAnthropicStream(body, res) {
             }
             break;
 
+          case "message_start":
+            if (data.message?.usage) inputTokens += data.message.usage.input_tokens || 0;
+            break;
+
           case "message_delta":
             if (data.delta?.stop_reason) stopReason = data.delta.stop_reason;
+            if (data.usage) {
+              if (data.usage.output_tokens) outputTokens = data.usage.output_tokens;
+              if (data.usage.input_tokens) inputTokens = data.usage.input_tokens;
+            }
             break;
         }
       } catch {
@@ -1020,6 +1466,8 @@ async function consumeAnthropicStream(body, res) {
     }),
     toolUseBlocks: allBlocks.filter((b) => b.type === "tool_use"),
     stopReason,
+    inputTokens,
+    outputTokens,
   };
 }
 
@@ -1578,21 +2026,104 @@ function extractTextFromHtml(html) {
 
 async function executeCode(language, code) {
   const { execFile } = await import("node:child_process");
-  const { writeFile, unlink } = await import("node:fs/promises");
+  const { writeFile, unlink, readFile, readdir, mkdir, rm } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
-  const tmpFile = path.join(tmpdir(), `claude-exec-${Date.now()}.${language === "python" ? "py" : "mjs"}`);
 
-  await writeFile(tmpFile, code, "utf8");
+  // Create a temp working directory for this execution
+  const workDir = path.join(tmpdir(), `claude-exec-${Date.now()}`);
+  await mkdir(workDir, { recursive: true });
+  const ext = language === "python" ? "py" : "cjs";
+  const tmpFile = path.join(workDir, `code.${ext}`);
+
+  // For JavaScript: inject require support for npm packages
+  let finalCode = code;
+  if (language !== "python") {
+    // .cjs supports require() natively — prepend module paths so it finds project deps
+    const jsPreamble = `const Module = require("module");\nconst _origResolve = Module._resolveFilename;\nModule._resolveFilename = function(request, parent, ...args) {\n  try { return _origResolve.call(this, request, parent, ...args); } catch {\n    return require.resolve(request, { paths: [${JSON.stringify(path.join(root, "node_modules"))}] });\n  }\n};\n`;
+    finalCode = jsPreamble + code;
+  }
+
+  // For Python: auto-inject Agg backend and auto-save any open figures
+  if (language === "python") {
+    finalCode = code;
+    const preamble = `import matplotlib\nmatplotlib.use("Agg")\nimport matplotlib.font_manager as _fm\nfor _p in ["/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"]:\n    try: _fm.fontManager.addfont(_p)\n    except: pass\nmatplotlib.rcParams["font.sans-serif"] = ["WenQuanYi Zen Hei", "Noto Sans CJK JP"] + matplotlib.rcParams["font.sans-serif"]\nmatplotlib.rcParams["axes.unicode_minus"] = False\n`;
+    const postamble = `\n\n# Auto-save open matplotlib figures (skip if user already saved images)\ntry:\n    import os as _os, matplotlib.pyplot as _plt\n    _has_images = any(f.endswith((".png",".jpg",".jpeg",".svg")) for f in _os.listdir("."))\n    if not _has_images and _plt.get_fignums():\n        for _i, _fig in enumerate(_plt.get_fignums()):\n            _plt.figure(_fig).savefig(f"${workDir}/figure_{_i}.png", dpi=150, bbox_inches="tight")\nexcept Exception:\n    pass\n`;
+    finalCode = preamble + code + postamble;
+  }
+
+  await writeFile(tmpFile, finalCode, "utf8");
   const cmd = language === "python" ? "python3" : process.execPath;
   const args = [tmpFile];
 
   return new Promise((resolve) => {
-    const proc = execFile(cmd, args, { timeout: 15000, maxBuffer: 512 * 1024 }, (err, stdout, stderr) => {
-      unlink(tmpFile).catch(() => {});
+    const env = { ...process.env, MPLBACKEND: "Agg" };
+    const proc = execFile(cmd, args, { timeout: 30000, maxBuffer: 2 * 1024 * 1024, cwd: workDir, env }, async (err, stdout, stderr) => {
+      // Scan for generated image files
+      const images = [];
+      try {
+        const files = await readdir(workDir);
+        for (const f of files) {
+          if (/\.(png|jpg|jpeg|svg)$/i.test(f)) {
+            const data = await readFile(path.join(workDir, f));
+            const ext = path.extname(f).slice(1).toLowerCase();
+            const mime = ext === "svg" ? "image/svg+xml" : ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png";
+            images.push(`data:${mime};base64,${data.toString("base64")}`);
+          }
+        }
+      } catch {}
+
+      // Scan for generated downloadable files (office docs, PDFs, ZIPs, etc.)
+      const generatedFiles = [];
+      const FILE_RE = /\.(docx|xlsx|pptx|pdf|zip|csv)$/i;
+      const mimeMap = {
+        docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        pdf: "application/pdf", zip: "application/zip", csv: "text/csv",
+      };
+      const captureFile = async (srcPath, displayName) => {
+        try {
+          const fileId = crypto.randomUUID();
+          const ext = path.extname(displayName).slice(1).toLowerCase();
+          const destPath = path.join(FILES_DIR, `${fileId}.${ext}`);
+          const { copyFile, stat } = await import("node:fs/promises");
+          await copyFile(srcPath, destPath);
+          const info = await stat(destPath);
+          const meta = {
+            id: fileId, filePath: destPath, fileName: displayName,
+            mime: mimeMap[ext] || "application/octet-stream",
+            size: info.size, expires: Date.now() + 7 * 24 * 3600_000, // 7 days
+          };
+          fileStore.set(fileId, meta);
+          // Persist metadata sidecar for restart recovery
+          fs.writeFile(path.join(FILES_DIR, `${fileId}.meta.json`), JSON.stringify(meta)).catch(() => {});
+          generatedFiles.push({ id: fileId, name: displayName, size: info.size });
+        } catch {}
+      };
+      // 1) Scan workDir for generated files
+      try {
+        const allFiles = await readdir(workDir);
+        for (const f of allFiles) {
+          if (FILE_RE.test(f)) await captureFile(path.join(workDir, f), f);
+        }
+      } catch {}
+      // 2) Fallback: scan stdout for absolute paths to generated files outside workDir
+      if (!generatedFiles.length && stdout) {
+        const pathMatches = stdout.match(/\/[^\s:,"']+\.(docx|xlsx|pptx|pdf|zip|csv)/gi) || [];
+        for (const p of pathMatches) {
+          if (!p.startsWith(workDir)) await captureFile(p, path.basename(p));
+        }
+      }
+
+      // Cleanup
+      rm(workDir, { recursive: true, force: true }).catch(() => {});
+
       if (err) {
-        resolve({ output: stderr || err.message || "Execution failed", error: true });
+        // Strip the preamble/postamble line numbers from error messages
+        const cleanErr = (stderr || err.message || "Execution failed").replace(/code\.(py|cjs)/g, "script");
+        resolve({ output: cleanErr, error: true, images, files: generatedFiles });
       } else {
-        resolve({ output: stdout + (stderr ? `\n[stderr]: ${stderr}` : ""), error: false });
+        resolve({ output: stdout + (stderr ? `\n[stderr]: ${stderr}` : ""), error: false, images, files: generatedFiles });
       }
     });
   });
@@ -2049,7 +2580,22 @@ async function executeGenerateLongDoc(args, res) {
   const requirements = String(args?.requirements || "").trim();
   const targetPages = Math.max(5, Math.min(120, Number(args?.pages) || 30));
 
+  // Create a background job so progress survives client disconnect
+  const jobId = crypto.randomUUID();
+  const job = {
+    id: jobId, status: "running", createdAt: Date.now(),
+    progress: [], artifact: null, result: null, error: null,
+  };
+  longDocJobs.set(jobId, job);
+
+  // Notify client of the jobId immediately
+  if (res) {
+    try { res.write(`event: longdoc_job\ndata: ${JSON.stringify({ jobId })}\n\n`); res.flush?.(); } catch {}
+  }
+
   const sendProgress = (data) => {
+    job.progress.push(data);
+    if (job.progress.length > 50) job.progress = job.progress.slice(-40);
     if (res) {
       try { res.write(`event: longdoc_progress\ndata: ${JSON.stringify(data)}\n\n`); res.flush?.(); } catch {}
     }
@@ -2133,27 +2679,35 @@ async function executeGenerateLongDoc(args, res) {
 
     sendProgress({ stage: "complete", message: `文档完成：${outline.chapters.length} 章，约 ${estimatedPages} 页` });
 
-    // Emit as artifact
+    // Store artifact in job for disconnect recovery
+    const artifactData = {
+      title: outline.title,
+      type: "document",
+      content: finalDoc,
+      language: "markdown",
+      description: `长文档 · ${outline.chapters.length}章 · ~${estimatedPages}页`,
+      file_path: "document.md",
+    };
+    job.artifact = artifactData;
+    job.status = "completed";
+    job.result = {
+      summary: `已生成「${outline.title}」(${outline.chapters.length}章, ~${estimatedPages}页)`,
+      content: `Long document "${outline.title}" generated: ${outline.chapters.length} chapters, ~${estimatedPages} pages. The document is now visible in the preview panel.`,
+    };
+
+    // Emit as artifact (may fail if client disconnected — that's OK, job has the data)
     if (res) {
       try {
-        res.write(`event: artifact\ndata: ${JSON.stringify({
-          title: outline.title,
-          type: "document",
-          content: finalDoc,
-          language: "markdown",
-          description: `长文档 · ${outline.chapters.length}章 · ~${estimatedPages}页`,
-          file_path: "document.md",
-        })}\n\n`);
+        res.write(`event: artifact\ndata: ${JSON.stringify(artifactData)}\n\n`);
         res.flush?.();
       } catch {}
     }
 
-    return {
-      summary: `已生成「${outline.title}」(${outline.chapters.length}章, ~${estimatedPages}页)`,
-      content: `Long document "${outline.title}" generated: ${outline.chapters.length} chapters, ~${estimatedPages} pages. The document is now visible in the preview panel.`,
-    };
+    return job.result;
   } catch (err) {
     console.error("[LongDoc] Error:", err);
+    job.status = "failed";
+    job.error = err.message;
     return { summary: "生成失败", content: `Long document generation failed: ${err.message}` };
   }
 }
@@ -2190,13 +2744,15 @@ ${chapter.research ? `参考资料：\n${chapter.research}\n` : ""}
 
 async function callClaude(prompt, maxTokens = 8192, retries = 3, useSubKey = false) {
   for (let attempt = 1; attempt <= retries; attempt++) {
+    const key = pickKey(useSubKey);
+    const masked = key.slice(0, 6) + "..." + key.slice(-4);
     try {
-      if (attempt > 1) await delay(2000 * attempt); // backoff: 4s, 6s
+      if (attempt > 1) await delay(2000 * attempt);
       const response = await fetch(apiEndpoint, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-api-key": apiKey,
+          "x-api-key": key,
           "anthropic-version": "2024-10-22",
         },
         body: JSON.stringify({
@@ -2207,17 +2763,19 @@ async function callClaude(prompt, maxTokens = 8192, retries = 3, useSubKey = fal
       });
       if (!response.ok) {
         const errText = await response.text().catch(() => "");
-        if (attempt < retries && (response.status === 400 || response.status === 429 || response.status >= 500)) {
-          console.log(`[LongDoc] API ${response.status}, retry ${attempt}/${retries}...`);
+        markKeyFailed(key, response.status);
+        if (attempt < retries && (response.status === 403 || response.status === 429 || response.status >= 500)) {
+          console.log(`[LongDoc] Key ${masked} failed (${response.status}), switching key and retrying ${attempt}/${retries}...`);
           continue;
         }
         throw new Error(`Claude API ${response.status}: ${errText.slice(0, 200)}`);
       }
+      markKeyOk(key);
       const data = await response.json();
       return (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
     } catch (err) {
       if (attempt < retries && !err.message?.startsWith("Claude API")) {
-        console.log(`[LongDoc] Network error, retry ${attempt}/${retries}:`, err.message);
+        console.log(`[LongDoc] Key ${masked} network error, retry ${attempt}/${retries}:`, err.message);
         continue;
       }
       throw err;

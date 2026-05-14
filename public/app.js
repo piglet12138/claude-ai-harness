@@ -171,7 +171,13 @@ function wireEvents() {
   els.downloadDoc.addEventListener("click", () => {
     const doc = activeDocument();
     if (!doc) return;
-    if (doc.type === "html") {
+    if (doc.type === "file" && doc.fileId) {
+      // File artifact: direct download
+      const a = document.createElement("a");
+      a.href = `/api/files/${doc.fileId}`;
+      a.download = doc.title;
+      a.click();
+    } else if (doc.type === "html") {
       downloadCurrentDoc("html");
     } else if (doc.type === "code") {
       downloadCurrentDoc("source");
@@ -266,6 +272,7 @@ function showLoginForm() {
 
 function showBugReportModal() {
   document.querySelector(".bug-modal")?.remove();
+  const bugImages = []; // base64 strings
   const modal = document.createElement("div");
   modal.className = "bug-modal";
   modal.innerHTML = `
@@ -273,7 +280,15 @@ function showBugReportModal() {
     <div class="bug-modal-card">
       <h3>反馈问题</h3>
       <p>描述你遇到的问题或建议：</p>
-      <textarea id="bugText" rows="5" placeholder="比如：上传图片后无法识别内容..."></textarea>
+      <textarea id="bugText" rows="5" placeholder="比如：上传图片后无法识别内容...&#10;&#10;可以直接粘贴截图 (Ctrl+V)"></textarea>
+      <div class="bug-images"></div>
+      <div class="bug-upload-row">
+        <label class="bug-upload-btn">
+          <input type="file" accept="image/*" multiple style="display:none" />
+          添加截图
+        </label>
+        <span class="bug-upload-hint">支持粘贴、拖拽或点击上传</span>
+      </div>
       <div class="bug-modal-actions">
         <button class="bug-cancel">取消</button>
         <button class="bug-submit">提交</button>
@@ -281,16 +296,80 @@ function showBugReportModal() {
       <div class="bug-msg"></div>
     </div>`;
   document.body.append(modal);
+
+  const imagesDiv = modal.querySelector(".bug-images");
+  const textarea = modal.querySelector("#bugText");
+
+  function addImage(dataUrl) {
+    if (bugImages.length >= 5) return; // max 5 images
+    bugImages.push(dataUrl);
+    renderBugImages();
+  }
+
+  function renderBugImages() {
+    imagesDiv.innerHTML = "";
+    bugImages.forEach((src, i) => {
+      const wrap = document.createElement("div");
+      wrap.className = "bug-image-thumb";
+      wrap.innerHTML = `<img src="${src}" /><span class="bug-image-remove" data-idx="${i}">&times;</span>`;
+      imagesDiv.append(wrap);
+    });
+    imagesDiv.querySelectorAll(".bug-image-remove").forEach(btn => {
+      btn.addEventListener("click", () => { bugImages.splice(Number(btn.dataset.idx), 1); renderBugImages(); });
+    });
+  }
+
+  function fileToDataUrl(file) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // File input
+  modal.querySelector('input[type="file"]').addEventListener("change", async (e) => {
+    for (const file of e.target.files) {
+      if (!file.type.startsWith("image/")) continue;
+      addImage(await fileToDataUrl(file));
+    }
+    e.target.value = "";
+  });
+
+  // Paste
+  textarea.addEventListener("paste", async (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) addImage(await fileToDataUrl(file));
+      }
+    }
+  });
+
+  // Drag & drop
+  const card = modal.querySelector(".bug-modal-card");
+  card.addEventListener("dragover", (e) => { e.preventDefault(); card.classList.add("drag-over"); });
+  card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+  card.addEventListener("drop", async (e) => {
+    e.preventDefault(); card.classList.remove("drag-over");
+    for (const file of e.dataTransfer.files) {
+      if (file.type.startsWith("image/")) addImage(await fileToDataUrl(file));
+    }
+  });
+
   modal.querySelector(".bug-cancel").addEventListener("click", () => modal.remove());
   modal.querySelector(".bug-modal-backdrop").addEventListener("click", () => modal.remove());
   modal.querySelector(".bug-submit").addEventListener("click", async () => {
     const text = modal.querySelector("#bugText").value.trim();
     const msg = modal.querySelector(".bug-msg");
-    if (!text) { msg.textContent = "请填写内容"; msg.style.color = "var(--accent)"; return; }
+    if (!text && !bugImages.length) { msg.textContent = "请填写内容或添加截图"; msg.style.color = "var(--accent)"; return; }
     modal.querySelector(".bug-submit").disabled = true;
     modal.querySelector(".bug-submit").textContent = "提交中...";
     try {
-      const resp = await fetch("/api/bug-report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+      const resp = await fetch("/api/bug-report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, images: bugImages }) });
       if (!resp.ok) throw new Error((await resp.json()).error || "提交失败");
       msg.textContent = "感谢反馈！";
       msg.style.color = "#4d9950";
@@ -307,6 +386,11 @@ function showBugReportModal() {
 async function logout() {
   await fetch("/api/logout", { method: "POST" });
   state.authenticated = false;
+  // Clear local data so next login starts fresh
+  state.threads = [];
+  state.activeId = "";
+  state.activeDocId = "";
+  try { saveThreads(); } catch {}
   showLogin();
 }
 
@@ -322,22 +406,24 @@ async function showChat() {
   // Load threads from server (SQLite)
   try {
     const serverThreads = await fetchJson("/api/threads");
-    if (serverThreads.length) {
-      // Merge: server is source of truth for metadata, keep local messages as cache
-      const localMap = new Map(state.threads.map(t => [t.id, t]));
-      state.threads = serverThreads.map(t => {
-        const local = localMap.get(t.id);
-        return {
-          id: t.id,
-          title: t.title,
-          archived: !!t.archived,
-          createdAt: t.created_at,
-          updatedAt: t.updated_at,
-          messages: local?.messages || [], // lazy-loaded
-          documents: local?.documents || [],
-          _loaded: local?._loaded || false,
-        };
-      });
+    // Server is source of truth — replace local threads with server data
+    const localMap = new Map(state.threads.map(t => [t.id, t]));
+    state.threads = serverThreads.map(t => {
+      const local = localMap.get(t.id);
+      return {
+        id: t.id,
+        title: t.title,
+        archived: !!t.archived,
+        createdAt: t.created_at,
+        updatedAt: t.updated_at,
+        messages: local?.messages || [], // lazy-loaded
+        documents: local?.documents || [],
+        _loaded: local?._loaded || false,
+      };
+    });
+    // If server has no threads (new account), clear any leftover local data
+    if (!serverThreads.length) {
+      state.threads = [];
     }
   } catch (e) {
     console.warn("[Sync] Failed to load threads from server, using local cache:", e.message);
@@ -345,18 +431,23 @@ async function showChat() {
   if (!state.threads.length) createThread();
   state.activeId ||= state.threads[0].id;
   render();
-  // Load messages for active thread
-  await loadThreadData(state.activeId);
+  // Load messages for active thread (force reload to pick up ratings)
+  await loadThreadData(state.activeId, true);
   render();
   // Migrate localStorage data to server (one-time)
   await migrateLocalToServer();
   resumePendingGoogleUpload();
+  // Fix stuck "running" tool cards from interrupted streams
+  fixStuckToolCards();
+  // Resume any pending long-doc background jobs
+  resumeLongDocJobs();
 }
 
-// Save partial content if user leaves/refreshes during streaming
-window.addEventListener("beforeunload", () => {
+// Save partial content and warn if user leaves/refreshes during streaming
+window.addEventListener("beforeunload", (e) => {
   if (state.streaming) {
     try { saveThreads(); } catch {}
+    e.preventDefault();
   }
 });
 
@@ -449,15 +540,18 @@ async function loadThreadData(threadId, forceReload) {
   if (!thread) return;
   if (thread._loaded && !forceReload) return;
   try {
-    const [serverMessages, documents] = await Promise.all([
+    const [serverMessages, documents, ratings] = await Promise.all([
       fetchJson("/api/threads/" + threadId + "/messages"),
       fetchJson("/api/threads/" + threadId + "/documents"),
+      fetchJson("/api/ratings?thread_id=" + threadId).catch(() => []),
     ]);
+    const ratingMap = new Map(ratings.map(r => [r.message_id, r.rating]));
     const mappedServer = serverMessages.map(m => ({
       id: m.id,
       role: m.role,
       content: m.content,
       toolCalls: m.toolCalls,
+      _feedback: ratingMap.has(m.id) ? (ratingMap.get(m.id) === 1 ? "up" : "down") : null,
     }));
     // Keep local messages if they have more content (e.g. partial streaming saved locally)
     const localLen = (thread.messages || []).reduce((s, m) => s + (typeof m.content === "string" ? m.content.length : 0), 0);
@@ -465,6 +559,10 @@ async function loadThreadData(threadId, forceReload) {
     if (localLen > serverLen && thread.messages.length >= mappedServer.length) {
       // Local has more content — keep it and sync to server
       console.log("[Sync] Local messages have more content, keeping local and syncing up");
+      // Apply ratings to local messages
+      for (const m of thread.messages) {
+        if (m.id && ratingMap.has(m.id)) m._feedback = ratingMap.get(m.id) === 1 ? "up" : "down";
+      }
       syncMessages(threadId, thread.messages);
     } else {
       thread.messages = mappedServer;
@@ -674,7 +772,8 @@ function renderDocuments() {
   for (const doc of docs) {
     const item = document.createElement("div");
     item.className = `thread-item${doc.id === state.activeDocId ? " active" : ""}`;
-    item.innerHTML = `<span class="thread-label">${escapeHtml(doc.title)}</span><small>${doc.source || ""}</small>`;
+    const fileIcon = doc.type === "file" ? { docx: "📄", xlsx: "📊", pptx: "📽", pdf: "📕", csv: "📋", zip: "📦" }[doc.language] || "📁" : "";
+    item.innerHTML = `<span class="thread-label">${fileIcon ? fileIcon + " " : ""}${escapeHtml(doc.title)}</span><small>${doc.source || ""}</small>`;
 
     const more = document.createElement("button");
     more.className = "thread-more-btn";
@@ -969,6 +1068,29 @@ function renderMessageActions(message, isStreamingMessage) {
     regen.addEventListener("click", () => regenerateLastMessage());
     actions.append(regen);
   }
+  // Feedback buttons (assistant messages only, not during streaming)
+  if (message.role === "assistant" && !isStreamingMessage && message.content) {
+    const feedbackDiv = document.createElement("div");
+    feedbackDiv.className = "feedback-buttons";
+
+    const thumbUp = document.createElement("button");
+    thumbUp.type = "button";
+    thumbUp.className = `message-action feedback-btn${message._feedback === "up" ? " active" : ""}`;
+    thumbUp.title = "有帮助";
+    thumbUp.innerHTML = '<span aria-hidden="true">&#x1F44D;</span>';
+    thumbUp.addEventListener("click", () => submitFeedback(message, "up", thumbUp, thumbDown));
+
+    const thumbDown = document.createElement("button");
+    thumbDown.type = "button";
+    thumbDown.className = `message-action feedback-btn${message._feedback === "down" ? " active" : ""}`;
+    thumbDown.title = "没帮助";
+    thumbDown.innerHTML = '<span aria-hidden="true">&#x1F44E;</span>';
+    thumbDown.addEventListener("click", () => submitFeedback(message, "down", thumbUp, thumbDown));
+
+    feedbackDiv.append(thumbUp, thumbDown);
+    actions.append(feedbackDiv);
+  }
+
   // Edit button for user messages
   if (message.role === "user" && !state.streaming) {
     const edit = document.createElement("button");
@@ -981,6 +1103,29 @@ function renderMessageActions(message, isStreamingMessage) {
   }
 
   return actions;
+}
+
+async function submitFeedback(message, feedback, thumbUp, thumbDown) {
+  // Toggle: clicking same button again removes feedback
+  if (message._feedback === feedback) {
+    message._feedback = null;
+    thumbUp.classList.remove("active");
+    thumbDown.classList.remove("active");
+    return;
+  }
+  message._feedback = feedback;
+  thumbUp.classList.toggle("active", feedback === "up");
+  thumbDown.classList.toggle("active", feedback === "down");
+  try {
+    const rating = feedback === "up" ? 1 : -1;
+    await fetch("/api/messages/" + encodeURIComponent(message.id) + "/rate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rating, thread_id: state.activeId }),
+    });
+  } catch (e) {
+    console.error("[Feedback]", e);
+  }
 }
 
 function editUserMessage(message) {
@@ -1010,7 +1155,7 @@ function regenerateLastMessage() {
   const lastUser = thread.messages.at(-1);
   if (!lastUser || lastUser.role !== "user") return;
   // Re-trigger send with existing user message
-  thread.messages.push({ role: "assistant", content: "", toolCalls: [] });
+  thread.messages.push({ id: crypto.randomUUID(), role: "assistant", content: "", toolCalls: [], _streamStart: Date.now() });
   state.streaming = true;
   state.abortController = new AbortController();
   updateSendButton();
@@ -1023,7 +1168,7 @@ function regenerateLastMessage() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: messagesForApi(thread, apiContent) }),
+        body: JSON.stringify({ messages: messagesForApi(thread, apiContent), threadId: thread.id }),
         signal: state.abortController.signal,
       });
       if (!response.ok || !response.body) throw new Error(await response.text());
@@ -1156,9 +1301,37 @@ function renderToolCard(tc) {
   // Expandable output for run_code
   if (tc.name === "run_code" && tc.codeResult) {
     const output = document.createElement("div");
-    output.className = `tool-code-output${tc._expanded ? " expanded" : ""}`;
+    output.className = `tool-code-output${tc._expanded ? " expanded" : ""}${tc.codeResult.images?.length ? " has-images" : ""}`;
+    // Show generated downloadable files
+    if (tc.codeResult.files?.length) {
+      const filesContainer = document.createElement("div");
+      filesContainer.className = "code-output-files";
+      for (const f of tc.codeResult.files) {
+        const a = document.createElement("a");
+        a.href = `/api/files/${f.id}`;
+        a.download = f.name;
+        a.className = "file-download-btn";
+        const ext = f.name.split(".").pop().toUpperCase();
+        const sizeStr = f.size > 1024 * 1024 ? `${(f.size / 1024 / 1024).toFixed(1)} MB` : `${Math.round(f.size / 1024)} KB`;
+        a.innerHTML = `<span class="file-icon">${ext === "DOCX" ? "📄" : ext === "XLSX" ? "📊" : ext === "PPTX" ? "📽" : ext === "PDF" ? "📕" : "📁"}</span><span class="file-info"><span class="file-name">${escapeHtml(f.name)}</span><span class="file-size">${sizeStr}</span></span><span class="file-dl-icon">↓</span>`;
+        filesContainer.append(a);
+      }
+      output.append(filesContainer);
+    }
+    // Show generated images inline
+    if (tc.codeResult.images?.length) {
+      const imgContainer = document.createElement("div");
+      imgContainer.className = "code-output-images";
+      for (const src of tc.codeResult.images) {
+        const img = document.createElement("img");
+        img.src = src;
+        img.alt = "Code output";
+        imgContainer.append(img);
+      }
+      output.append(imgContainer);
+    }
     const pre = document.createElement("pre");
-    pre.textContent = tc.codeResult.output || "(no output)";
+    pre.textContent = tc.codeResult.output || (tc.codeResult.images?.length ? "(图表已生成)" : "(no output)");
     if (tc.codeResult.error) pre.classList.add("error");
     output.append(pre);
     card.append(output);
@@ -1167,24 +1340,107 @@ function renderToolCard(tc) {
       output.classList.toggle("expanded", tc._expanded);
       card.querySelector(".tool-chevron")?.classList.toggle("expanded", tc._expanded);
     });
+    // Auto-expand if there are images or files
+    if ((tc.codeResult.images?.length || tc.codeResult.files?.length) && !tc._expanded) {
+      tc._expanded = true;
+      output.classList.add("expanded");
+    }
   }
 
-  // Long doc progress log
-  if (tc.name === "generate_long_document" && tc._progressLog?.length) {
-    const logDiv = document.createElement("div");
-    logDiv.className = "tool-code-output expanded";
-    logDiv.style.maxHeight = "150px";
-    logDiv.style.overflowY = "auto";
-    logDiv.style.fontSize = "12px";
-    logDiv.style.lineHeight = "1.6";
-    logDiv.style.color = "var(--muted)";
-    const logText = tc._progressLog.map(l => {
-      if (l.includes("完成") || l.includes("✓")) return `<span style="color:#4d9950">${escapeHtml(l)}</span>`;
-      if (l.includes("失败") || l.includes("错误")) return `<span style="color:var(--accent)">${escapeHtml(l)}</span>`;
-      return escapeHtml(l);
-    }).join("<br>");
-    logDiv.innerHTML = logText;
-    card.append(logDiv);
+  // Long doc progress log with progress bar
+  if (tc.name === "generate_long_document") {
+    const progressDiv = document.createElement("div");
+    progressDiv.className = "longdoc-progress";
+
+    // Parse progress to determine stage and percentage
+    const logs = tc._progressLog || [];
+    const lastLog = logs[logs.length - 1] || "";
+    let pct = 0, stageLabel = "准备中...";
+    if (lastLog.includes("大纲")) { pct = 10; stageLabel = "规划大纲"; }
+    if (lastLog.includes("搜索")) { pct = 20; stageLabel = "搜索参考资料"; }
+    const writingMatch = lastLog.match(/第\s*(\d+).*?\/(\d+)\s*章/);
+    const chapterDone = logs.filter(l => l.includes("章") && (l.includes("完成") || l.includes("done"))).length;
+    if (writingMatch) {
+      const current = parseInt(writingMatch[1]);
+      const total = parseInt(writingMatch[2]);
+      pct = 25 + Math.round((current / total) * 65);
+      stageLabel = `撰写中 (${current}/${total} 章)`;
+    } else if (chapterDone > 0) {
+      // Estimate from completed chapters in logs
+      const totalMatch = logs.join(" ").match(/(\d+)\s*章/g);
+      const totalChapters = totalMatch ? Math.max(...totalMatch.map(m => parseInt(m))) : 6;
+      pct = 25 + Math.round((chapterDone / totalChapters) * 65);
+      stageLabel = `撰写中 (${chapterDone} 章已完成)`;
+    }
+    if (lastLog.includes("组装")) { pct = 92; stageLabel = "组装文档"; }
+    if (lastLog.includes("文档完成")) { pct = 100; stageLabel = "完成"; }
+    if (tc.status === "completed") pct = 100;
+
+    // Progress bar
+    const bar = document.createElement("div");
+    bar.className = "longdoc-bar";
+    bar.innerHTML = `<div class="longdoc-bar-fill" style="width:${pct}%"></div>`;
+    progressDiv.append(bar);
+
+    // Stage label + elapsed time
+    const info = document.createElement("div");
+    info.className = "longdoc-info";
+    const elapsed = tc._startTime ? Math.round((Date.now() - tc._startTime) / 1000) : 0;
+    const elapsedStr = elapsed > 0 ? `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}` : "";
+    info.innerHTML = `<span>${escapeHtml(stageLabel)}</span>${elapsedStr ? `<span class="longdoc-elapsed">${elapsedStr}</span>` : ""}`;
+    progressDiv.append(info);
+
+    // Tip messages (rotate every 8 seconds)
+    if (tc.status === "running") {
+      if (!tc._startTime) tc._startTime = Date.now();
+      const tips = [
+        "长文档由多个子 Agent 并行撰写，每章独立生成后汇编",
+        "生成过程中可以放心刷新页面，进度不会丢失",
+        "每个章节约需 20-40 秒，取决于复杂度",
+        "生成完成后可以导出为 DOCX 格式",
+        "Opus 模型正在深度思考，好文档值得等待",
+        "多个 API Key 轮流工作中，最大化生成速度",
+      ];
+      const tipIdx = Math.floor(Date.now() / 8000) % tips.length;
+      const tipDiv = document.createElement("div");
+      tipDiv.className = "longdoc-tip";
+      tipDiv.textContent = tips[tipIdx];
+      progressDiv.append(tipDiv);
+    }
+
+    card.append(progressDiv);
+
+    // Detailed log (collapsed by default)
+    if (logs.length > 0) {
+      const toggle = document.createElement("div");
+      toggle.className = "longdoc-log-toggle";
+      toggle.textContent = tc._logExpanded ? "收起日志 ▴" : "查看详细日志 ▾";
+      toggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+        tc._logExpanded = !tc._logExpanded;
+        const thread = state.threads.find(t => t.id === state.activeId);
+        const assistant = thread?.messages?.at(-1);
+        if (thread && assistant) queueStreamRender(thread, assistant);
+      });
+      card.append(toggle);
+
+      if (tc._logExpanded) {
+        const logDiv = document.createElement("div");
+        logDiv.className = "tool-code-output expanded";
+        logDiv.style.maxHeight = "150px";
+        logDiv.style.overflowY = "auto";
+        logDiv.style.fontSize = "12px";
+        logDiv.style.lineHeight = "1.6";
+        logDiv.style.color = "var(--muted)";
+        const logText = logs.map(l => {
+          if (l.includes("完成") || l.includes("✓")) return `<span style="color:#4d9950">${escapeHtml(l)}</span>`;
+          if (l.includes("失败") || l.includes("错误")) return `<span style="color:var(--accent)">${escapeHtml(l)}</span>`;
+          return escapeHtml(l);
+        }).join("<br>");
+        logDiv.innerHTML = logText;
+        card.append(logDiv);
+      }
+    }
   }
 
   // Clickable artifact card → open doc panel
@@ -1285,6 +1541,8 @@ function updateStreamingMessage(assistant) {
   let bubble = body.querySelector(".message-bubble.streaming");
   const content = displayAssistantMessage(assistant.content);
   if (content.trim()) {
+    // Remove waiting indicator if present
+    body.querySelector(".stream-waiting")?.remove();
     if (!bubble) {
       bubble = document.createElement("div");
       bubble.className = "message-bubble streaming";
@@ -1294,6 +1552,26 @@ function updateStreamingMessage(assistant) {
       else body.append(bubble);
     }
     bubble.innerHTML = renderRichDocument(content, "chat");
+  } else if (!content.trim() && state.streaming && !body.querySelector(".stream-waiting")) {
+    // No content yet — show a waiting indicator with elapsed time
+    const waiting = document.createElement("div");
+    waiting.className = "stream-waiting";
+    waiting.innerHTML = `<span class="stream-waiting-dot"></span><span class="stream-waiting-text">思考中...</span>`;
+    const actions = body.querySelector(".message-actions");
+    if (actions) body.insertBefore(waiting, actions);
+    else body.append(waiting);
+    // Update elapsed time every second
+    if (!assistant._waitingTimer) {
+      assistant._waitingTimer = setInterval(() => {
+        const el = document.querySelector(".stream-waiting-text");
+        if (!el || !state.streaming) { clearInterval(assistant._waitingTimer); assistant._waitingTimer = null; return; }
+        const sec = Math.round((Date.now() - (assistant._streamStart || Date.now())) / 1000);
+        if (sec >= 5) {
+          const tips = ["深度思考中", "正在推理", "组织回答中", "分析问题中"];
+          el.textContent = `${tips[Math.floor(sec / 6) % tips.length]}... ${sec}s`;
+        }
+      }, 1000);
+    }
   }
 
   // Scroll to bottom
@@ -1317,7 +1595,11 @@ function renderDocumentPanel() {
   els.docTitle.textContent = doc.title;
   els.docMeta.textContent = artifactMeta(doc);
   els.downloadHtml?.classList.toggle("hidden", doc.type !== "document" && doc.type !== "html");
-  els.downloadDoc.textContent = doc.type === "html" ? "下载源码" : doc.type === "code" ? "下载源码" : "下载 DOCX";
+  els.uploadGoogleDoc?.classList.toggle("hidden", doc.type === "file");
+  els.artifactPreviewTab?.classList.toggle("hidden", doc.type === "file");
+  els.artifactSourceTab?.classList.toggle("hidden", doc.type === "file");
+  els.shareDoc?.classList.toggle("hidden", doc.type === "file");
+  els.downloadDoc.textContent = doc.type === "file" ? "下载" : doc.type === "html" ? "下载源码" : doc.type === "code" ? "下载源码" : "下载 DOCX";
   // Version navigation
   renderVersionNav(doc);
   els.uploadGoogleDoc.disabled = false;
@@ -1331,7 +1613,17 @@ function renderDocumentPanel() {
     return;
   }
   els.docPreview.className = `doc-preview ${doc.type === "html" ? "html-preview" : ""}`;
-  if (doc.type === "html") {
+  if (doc.type === "file" && doc.fileId) {
+    const ext = (doc.language || doc.filePath?.split(".").pop() || "").toUpperCase();
+    const sizeStr = doc.fileSize > 1024 * 1024 ? `${(doc.fileSize / 1024 / 1024).toFixed(1)} MB` : `${Math.round((doc.fileSize || 0) / 1024)} KB`;
+    const iconMap = { DOCX: "📄", XLSX: "📊", PPTX: "📽", PDF: "📕", CSV: "📋", ZIP: "📦" };
+    els.docPreview.innerHTML = `<div class="file-artifact-preview">
+      <div class="file-artifact-icon">${iconMap[ext] || "📁"}</div>
+      <div class="file-artifact-name">${escapeHtml(doc.title)}</div>
+      <div class="file-artifact-meta">${ext} 文件 · ${sizeStr}</div>
+      <a href="/api/files/${doc.fileId}" download="${escapeAttribute(doc.title)}" class="file-artifact-download">下载文件</a>
+    </div>`;
+  } else if (doc.type === "html") {
     els.docPreview.innerHTML = `<iframe title="Artifact preview" sandbox="allow-scripts allow-forms allow-modals allow-popups" srcdoc="${escapeAttribute(displayContent)}"></iframe>`;
   } else {
     els.docPreview.innerHTML = renderRichDocument(displayContent, "document");
@@ -1440,9 +1732,9 @@ async function send(event) {
   const apiContent = buildUserApiContent(text, attachments);
   state.expectDocument = false; // Artifact creation is now driven by tool use only
 
-  thread.messages.push({ role: "user", content: userContent, attachments: displayAttachments });
+  thread.messages.push({ id: crypto.randomUUID(), role: "user", content: userContent, attachments: displayAttachments });
   thread.title = titleFrom(userContent || displayAttachments[0]?.name || "图片");
-  thread.messages.push({ role: "assistant", content: "", toolCalls: [] });
+  thread.messages.push({ id: crypto.randomUUID(), role: "assistant", content: "", toolCalls: [], _streamStart: Date.now() });
   state.attachments = [];
   els.prompt.value = "";
   autosize();
@@ -1456,7 +1748,7 @@ async function send(event) {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ messages: messagesForApi(thread, apiContent) }),
+      body: JSON.stringify({ messages: messagesForApi(thread, apiContent), threadId: thread.id }),
       signal: state.abortController.signal,
     });
     if (!response.ok || !response.body) throw new Error(await response.text());
@@ -1555,6 +1847,15 @@ function handleSSEEvent(eventType, data, assistant, thread) {
       }
       queueStreamRender(thread, assistant);
       break;
+    case "longdoc_job": {
+      // Server assigned a background job ID — persist it for disconnect recovery
+      if (data.jobId && thread) {
+        thread._longDocJobId = data.jobId;
+        thread._longDocJobSeen = 0;
+        try { saveThreads(); } catch {}
+      }
+      break;
+    }
     case "longdoc_progress": {
       // Update the generate_long_document tool card with progress
       if (assistant.toolCalls) {
@@ -1565,6 +1866,8 @@ function handleSSEEvent(eventType, data, assistant, thread) {
           tc._progressLog = tc._progressLog || [];
           if (data.message) tc._progressLog.push(data.message);
           if (tc._progressLog.length > 20) tc._progressLog = tc._progressLog.slice(-15);
+          // Track how many progress events we've seen (for incremental polling)
+          if (thread) thread._longDocJobSeen = (thread._longDocJobSeen || 0) + 1;
           queueStreamRender(thread, assistant);
           // Save periodically so refresh shows latest state
           try { saveThreads(); } catch {}
@@ -1574,6 +1877,11 @@ function handleSSEEvent(eventType, data, assistant, thread) {
     }
     case "artifact":
       upsertArtifactFromTool(data, thread);
+      // Long doc job delivered artifact via SSE — clean up job tracking
+      if (thread._longDocJobId) {
+        delete thread._longDocJobId;
+        delete thread._longDocJobSeen;
+      }
       renderDocuments();
       renderDocumentPanel();
       break;
@@ -1586,6 +1894,121 @@ function handleSSEEvent(eventType, data, assistant, thread) {
       }
       break;
   }
+}
+
+// Fix tool cards stuck in "running" state after page refresh (stream was interrupted)
+function fixStuckToolCards() {
+  if (state.streaming) return; // don't touch if actively streaming
+  for (const thread of state.threads) {
+    for (const msg of (thread.messages || [])) {
+      if (msg.role !== "assistant" || !msg.toolCalls) continue;
+      for (const tc of msg.toolCalls) {
+        // Skip long-doc jobs — those have their own recovery via polling
+        if (tc.name === "generate_long_document" && thread._longDocJobId) continue;
+        if (tc.status === "running") {
+          tc.status = "completed";
+          tc.summary = tc.summary || "已中断（页面刷新）";
+          console.log(`[Recovery] Marked stuck tool card as completed: ${tc.name}`);
+        }
+      }
+    }
+  }
+  try { saveThreads(); } catch {}
+}
+
+// Resume long-doc background jobs after page refresh
+function resumeLongDocJobs() {
+  for (const thread of state.threads) {
+    if (!thread._longDocJobId) continue;
+    const jobId = thread._longDocJobId;
+    // Find the tool card that was running
+    const lastMsg = [...(thread.messages || [])].reverse().find(m => m.role === "assistant" && m.toolCalls);
+    const tc = lastMsg?.toolCalls?.find(t => t.name === "generate_long_document" && t.status === "running");
+    if (!tc) {
+      // Tool already completed or doesn't exist — clean up
+      delete thread._longDocJobId;
+      delete thread._longDocJobSeen;
+      try { saveThreads(); } catch {}
+      continue;
+    }
+    console.log(`[LongDoc] Resuming job ${jobId} for thread ${thread.id}`);
+    pollLongDocJob(thread, lastMsg, tc, jobId);
+  }
+}
+
+async function pollLongDocJob(thread, assistant, tc, jobId) {
+  const seen = thread._longDocJobSeen || 0;
+  let pollCount = 0;
+  const maxPolls = 300; // ~10 min at 2s interval
+  const interval = 2000;
+
+  const poll = async () => {
+    try {
+      const sinceIdx = (thread._longDocJobSeen || 0);
+      const res = await fetchJson(`/api/job/${jobId}?since=${sinceIdx}`);
+
+      // Apply new progress events
+      if (res.progress?.length) {
+        for (const p of res.progress) {
+          tc.summary = p.message || tc.summary;
+          tc._progressLog = tc._progressLog || [];
+          if (p.message) tc._progressLog.push(p.message);
+          if (tc._progressLog.length > 20) tc._progressLog = tc._progressLog.slice(-15);
+        }
+        thread._longDocJobSeen = res.progressTotal;
+        queueStreamRender(thread, assistant);
+        try { saveThreads(); } catch {}
+      }
+
+      if (res.status === "completed") {
+        tc.status = "completed";
+        tc.summary = res.progress?.slice(-1)?.[0]?.message || tc.summary;
+        // Apply the artifact
+        if (res.artifact) {
+          upsertArtifactFromTool(res.artifact, thread);
+          renderDocuments();
+          renderDocumentPanel();
+        }
+        // Clean up job tracking
+        delete thread._longDocJobId;
+        delete thread._longDocJobSeen;
+        queueStreamRender(thread, assistant);
+        try { saveThreads(); } catch {}
+        console.log(`[LongDoc] Job ${jobId} completed successfully`);
+        return; // stop polling
+      }
+
+      if (res.status === "failed") {
+        tc.status = "completed";
+        tc.summary = `生成失败: ${res.error || "未知错误"}`;
+        delete thread._longDocJobId;
+        delete thread._longDocJobSeen;
+        queueStreamRender(thread, assistant);
+        try { saveThreads(); } catch {}
+        console.error(`[LongDoc] Job ${jobId} failed:`, res.error);
+        return; // stop polling
+      }
+
+      // Still running — continue polling
+      pollCount++;
+      if (pollCount < maxPolls) {
+        setTimeout(poll, interval);
+      } else {
+        console.warn(`[LongDoc] Job ${jobId} polling timeout`);
+        tc.summary = "生成超时，请刷新重试";
+        tc.status = "completed";
+        delete thread._longDocJobId;
+        queueStreamRender(thread, assistant);
+        try { saveThreads(); } catch {}
+      }
+    } catch (err) {
+      console.error(`[LongDoc] Poll error for job ${jobId}:`, err.message);
+      pollCount++;
+      if (pollCount < maxPolls) setTimeout(poll, interval * 2);
+    }
+  };
+
+  poll();
 }
 
 function upsertArtifactFromTool(data, thread) {
@@ -1605,6 +2028,11 @@ function upsertArtifactFromTool(data, thread) {
     view: artifactType === "code" ? "source" : "preview",
     updatedAt: Date.now(),
   };
+  // File-type artifacts carry download metadata
+  if (artifactType === "file" && data.fileId) {
+    payload.fileId = data.fileId;
+    payload.fileSize = data.fileSize || 0;
+  }
   if (existing) {
     existing.versions = existing.versions || [];
     existing.versions.push({ content: existing.content, title: existing.title, updatedAt: existing.updatedAt });

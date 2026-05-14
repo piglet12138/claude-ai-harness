@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>What's New — Lite Claude UI</title>
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f3ec;
+        --paper: #fffaf2;
+        --ink: #2d251d;
+        --muted: #766b5f;
+        --faint: #a89d90;
+        --line: #ddd2c3;
+        --accent: #bd5d3a;
+        --accent-light: rgba(189, 93, 58, 0.08);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.6;
+      }
+      header, main, footer {
+        width: min(780px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 22px 0;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 17px;
+        font-weight: 720;
+        text-decoration: none;
+        color: var(--ink);
+      }
+      .brand img { width: 30px; height: 30px; }
+      nav { display: flex; gap: 14px; align-items: center; }
+      a { color: #93482d; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .app-link {
+        display: inline-flex;
+        min-height: 38px;
+        align-items: center;
+        border-radius: 10px;
+        background: var(--ink);
+        color: var(--paper);
+        padding: 0 14px;
+        font-weight: 680;
+      }
+      .app-link:hover { background: #93482d; text-decoration: none; }
+
+      /* page title */
+      .page-title {
+        margin: 40px 0 8px;
+        font-size: 38px;
+        font-weight: 720;
+        line-height: 1.15;
+      }
+      .page-desc {
+        color: var(--muted);
+        font-size: 17px;
+        margin: 0 0 40px;
+      }
+
+      /* timeline */
+      .timeline { position: relative; padding: 0; }
+      .timeline::before {
+        content: '';
+        position: absolute;
+        left: 7px;
+        top: 8px;
+        bottom: 0;
+        width: 2px;
+        background: var(--line);
+      }
+
+      .entry {
+        position: relative;
+        padding-left: 36px;
+        margin-bottom: 36px;
+      }
+      .entry:last-child { margin-bottom: 0; }
+
+      /* timeline dot */
+      .entry::before {
+        content: '';
+        position: absolute;
+        left: 1px;
+        top: 8px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--bg);
+        border: 2.5px solid var(--line);
+      }
+      .entry.highlight::before {
+        border-color: var(--accent);
+        background: var(--accent-light);
+      }
+
+      .entry-date {
+        font-size: 13px;
+        font-weight: 650;
+        color: var(--faint);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        margin-bottom: 6px;
+      }
+      .entry.highlight .entry-date { color: var(--accent); }
+
+      .entry-title {
+        font-size: 20px;
+        font-weight: 680;
+        margin-bottom: 8px;
+        line-height: 1.3;
+      }
+
+      .entry-body {
+        color: var(--muted);
+        font-size: 15px;
+        line-height: 1.7;
+      }
+      .entry-body ul {
+        margin: 8px 0 0;
+        padding-left: 20px;
+      }
+      .entry-body li { margin-bottom: 4px; }
+
+      .tag {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 650;
+        padding: 2px 8px;
+        border-radius: 6px;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+      .tag-feat { background: rgba(52, 140, 90, 0.1); color: #2a7a4a; }
+      .tag-fix { background: rgba(180, 120, 40, 0.1); color: #9a6a20; }
+      .tag-perf { background: rgba(80, 100, 180, 0.1); color: #4a5aaa; }
+
+      /* footer */
+      footer {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 12px;
+        border-top: 1px solid var(--line);
+        padding: 22px 0 30px;
+        margin-top: 56px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      footer div { display: flex; gap: 14px; }
+
+      @media (max-width: 640px) {
+        .page-title { font-size: 28px; }
+        .entry-title { font-size: 17px; }
+        nav { gap: 10px; font-size: 13px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/">
+        <img src="/logo.svg" alt="" />
+        <span>Lite Claude UI</span>
+      </a>
+      <nav aria-label="Primary">
+        <a href="/">Home</a>
+        <a class="app-link" href="/app">Open App</a>
+      </nav>
+    </header>
+
+    <main>
+      <h1 class="page-title">What's New</h1>
+      <p class="page-desc">Latest updates, features, and improvements.</p>
+
+      <div class="timeline">
+
+        <div class="entry highlight">
+          <div class="entry-date">May 14, 2026</div>
+          <div class="entry-title"><span class="tag tag-feat">feat</span> Office File Generation</div>
+          <div class="entry-body">
+            Generate Word (.docx), Excel (.xlsx), and PowerPoint (.pptx) files directly from conversation. The AI can create structured documents, spreadsheets with data, and presentations — all downloadable from the artifact panel.
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">May 12, 2026</div>
+          <div class="entry-title"><span class="tag tag-feat">feat</span> Usage Tracking &amp; Admin Panel</div>
+          <div class="entry-body">
+            Per-user token usage tracking with a dedicated admin panel tab. Admins can now monitor API consumption across all accounts with monthly breakdowns.
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">May 11, 2026</div>
+          <div class="entry-title"><span class="tag tag-fix">fix</span> Matplotlib &amp; Chart Rendering</div>
+          <div class="entry-body">
+            <ul>
+              <li>Auto-register Chinese fonts for matplotlib code execution</li>
+              <li>Prevent duplicate documents on regeneration</li>
+              <li>Fix chart display cutoff in artifact panel</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">May 10, 2026</div>
+          <div class="entry-title"><span class="tag tag-feat">feat</span> Inline Charts &amp; Bug Report Improvements</div>
+          <div class="entry-body">
+            Matplotlib charts now render inline in the chat stream. Bug reports support image upload, paste, and drag-drop for visual context.
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">May 9, 2026</div>
+          <div class="entry-title"><span class="tag tag-perf">perf</span> Reduced Waiting Anxiety</div>
+          <div class="entry-body">
+            New progress bar, elapsed time counter, and rotating tips during AI responses. API key pool with round-robin rotation and temporary cooldown for better reliability.
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">May 8, 2026</div>
+          <div class="entry-title"><span class="tag tag-feat">feat</span> Sharing &amp; Mobile Document Access</div>
+          <div class="entry-body">
+            <ul>
+              <li>Generate temporary share links for artifacts (24h expiry)</li>
+              <li>Floating action button for document access on mobile</li>
+              <li>Artifacts persist to SQLite — survive page refresh</li>
+              <li>Long document generation now recoverable after disconnect</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">May 7, 2026</div>
+          <div class="entry-title"><span class="tag tag-feat">feat</span> SQLite Storage &amp; Multi-Engine Search</div>
+          <div class="entry-body">
+            Migrated from localStorage-only to SQLite backend for conversations, documents, and usage data. Web search now supports 5-engine fallback chain: Serper, Tavily, Brave, Google CSE, and DuckDuckGo.
+            <ul>
+              <li>Long document generation with parallel chapter writing</li>
+              <li>DOCX export for generated documents</li>
+              <li>Mobile-optimized responsive layout</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">May 6, 2026</div>
+          <div class="entry-title"><span class="tag tag-feat">feat</span> Multi-User Accounts &amp; Bug Reports</div>
+          <div class="entry-body">
+            User registration and login system with session management. Built-in bug report feature so users can flag issues directly from the app.
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">May 5, 2026</div>
+          <div class="entry-title"><span class="tag tag-feat">feat</span> Dual Theme &amp; Code Interpreter</div>
+          <div class="entry-body">
+            Major UX overhaul introducing light/dark theme toggle, sandboxed JavaScript code execution, and a document management sidebar with version tracking.
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">May 4, 2026</div>
+          <div class="entry-title"><span class="tag tag-feat">feat</span> Agentic Tool Use Loop</div>
+          <div class="entry-body">
+            The core agentic architecture: Claude iteratively calls tools (web search, code execution, artifact creation) in a loop until the task is complete. Up to 8 rounds per request with 80K context budget management.
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <footer>
+      <span>Lite Claude UI</span>
+      <div>
+        <a href="/">Home</a>
+        <a href="/privacy.html">Privacy Policy</a>
+        <a href="/terms.html">Terms</a>
+      </div>
+    </footer>
+  </body>
+</html>

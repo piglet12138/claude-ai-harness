@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   Lite Claude UI — Dual Theme: Day (warm parchment) / Night (ink)
+   Claude AI Harness — Dual Theme: Day (warm parchment) / Night (ink)
    Toggle via data-theme="light|dark" on <html>
    ═══════════════════════════════════════════════════════════════ */
 
@@ -682,6 +682,73 @@ img.brand-logo.large {
   cursor: default;
 }
 
+.bug-images {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.bug-image-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.bug-image-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.bug-image-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.bug-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.bug-upload-btn {
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 4px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+}
+
+.bug-upload-btn:hover {
+  background: rgba(128,128,128,0.06);
+}
+
+.bug-upload-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.bug-modal-card.drag-over {
+  border-color: var(--accent);
+  background: rgba(192,90,50,0.03);
+}
+
 .bug-msg {
   margin-top: 8px;
   font-size: 12px;
@@ -982,6 +1049,95 @@ img.brand-logo.large {
   to { transform: scale(1); opacity: 1; }
 }
 
+/* Long doc progress bar */
+.longdoc-progress {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.longdoc-bar {
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.longdoc-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.6s ease;
+}
+
+.longdoc-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.longdoc-elapsed {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.longdoc-tip {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.6;
+  font-style: italic;
+  animation: tip-fade 8s ease infinite;
+}
+
+@keyframes tip-fade {
+  0%, 90%, 100% { opacity: 0.6; }
+  10%, 80% { opacity: 0.6; }
+  5%, 95% { opacity: 0; }
+}
+
+.longdoc-log-toggle {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.longdoc-log-toggle:hover {
+  opacity: 1;
+}
+
+/* Streaming waiting indicator */
+.stream-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.stream-waiting-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  border-radius: 50%;
+  animation: waiting-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes waiting-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+.stream-waiting-text {
+  font-variant-numeric: tabular-nums;
+}
+
 .tool-chevron {
   width: 0;
   height: 0;
@@ -1064,8 +1220,13 @@ img.brand-logo.large {
 }
 
 .tool-code-output.expanded {
-  max-height: 300px;
+  max-height: 600px;
+  overflow-y: auto;
   margin-top: 8px;
+}
+
+.tool-code-output.has-images.expanded {
+  max-height: none;
 }
 
 .tool-code-output pre {
@@ -1085,6 +1246,80 @@ img.brand-logo.large {
 
 .tool-code-output pre.error {
   color: #e07060;
+}
+
+/* File artifact preview in doc panel */
+.file-artifact-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 320px;
+  gap: 12px;
+  padding: 40px 20px;
+  text-align: center;
+}
+.file-artifact-icon { font-size: 64px; }
+.file-artifact-name { font-size: 18px; font-weight: 650; color: var(--ink); word-break: break-all; }
+.file-artifact-meta { font-size: 13px; color: var(--muted); }
+.file-artifact-download {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 8px;
+  padding: 10px 28px;
+  border-radius: 10px;
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 650;
+  font-size: 15px;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.file-artifact-download:hover { background: var(--accent, #bd5d3a); text-decoration: none; }
+
+.code-output-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.file-download-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+  text-decoration: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  cursor: pointer;
+}
+.file-download-btn:hover {
+  border-color: var(--accent, #bd5d3a);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  text-decoration: none;
+}
+.file-icon { font-size: 22px; flex-shrink: 0; }
+.file-info { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.file-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-size { font-size: 11px; color: var(--muted); }
+.file-dl-icon { font-size: 18px; font-weight: 700; color: var(--muted); flex-shrink: 0; }
+
+.code-output-images {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.code-output-images img {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
 }
 
 /* Regenerate button */
