@@ -1,0 +1,6 @@
+# Force LF for shell scripts — Windows autocrlf otherwise breaks them in WSL.
+*.sh text eol=lf
+scripts/* text eol=lf
+
+# Default text normalization (LF in repo, autocrlf'd locally where applicable).
+* text=auto
