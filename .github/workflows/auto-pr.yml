@@ -44,11 +44,7 @@ jobs:
           fi
 
           title=$(gh issue view "$issue_num" --repo "$REPO" --json title --jq '.title' 2>/dev/null || echo "$BRANCH")
-          body="Auto-opened from \`$BRANCH\` via push trigger.
-
-Closes #${issue_num}
-
-🤖 Auto-PR by .github/workflows/auto-pr.yml — will auto-merge when CI passes."
+          body=$(printf 'Auto-opened from `%s` via push trigger.\n\nCloses #%s\n\n🤖 Auto-PR by .github/workflows/auto-pr.yml — will auto-merge when CI passes.' "$BRANCH" "$issue_num")
 
           pr_url=$(gh pr create --repo "$REPO" --base dev --head "$BRANCH" \
             --title "agent: $title" --body "$body")
