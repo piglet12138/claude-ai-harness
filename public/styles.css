@@ -422,6 +422,37 @@ img.brand-logo.large {
   color: var(--ink);
 }
 
+.thread-star-btn {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 14px;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+
+.thread-star-btn.starred {
+  display: flex;
+  color: #e8a020;
+}
+
+.thread-item:hover .thread-star-btn {
+  display: flex;
+}
+
+.thread-star-btn:hover {
+  background: rgba(128, 128, 128, 0.12);
+  color: #e8a020;
+}
+
 /* Context menu */
 .ctx-menu {
   position: fixed;

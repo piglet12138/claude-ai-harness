@@ -517,7 +517,7 @@ const server = http.createServer(async (req, res) => {
       if (!session) return json(res, { error: "Unauthorized" }, 401);
       const body = await readJson(req, 64 * 1024);
       const id = body.id || crypto.randomUUID();
-      dbThreads.create(id, session.userId, body.title || "新对话", body.archived ? 1 : 0, body.createdAt, body.updatedAt);
+      dbThreads.create(id, session.userId, body.title || "新对话", body.archived ? 1 : 0, body.starred ? 1 : 0, body.createdAt, body.updatedAt);
       return json(res, { ok: true, id });
     }
 
@@ -528,7 +528,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req, 32 * 1024);
       const existing = dbThreads.get(threadId, session.userId);
       if (!existing) return json(res, { error: "Not found" }, 404);
-      dbThreads.update(threadId, session.userId, body.title ?? existing.title, body.archived ?? existing.archived);
+      dbThreads.update(threadId, session.userId, body.title ?? existing.title, body.archived ?? existing.archived, body.starred ?? existing.starred);
       return json(res, { ok: true });
     }
 
@@ -563,7 +563,7 @@ const server = http.createServer(async (req, res) => {
       }
       // Touch thread updated_at
       const t = dbThreads.get(threadId, session.userId);
-      if (t) dbThreads.update(threadId, session.userId, t.title, t.archived);
+      if (t) dbThreads.update(threadId, session.userId, t.title, t.archived, t.starred);
       return json(res, { ok: true });
     }
 
