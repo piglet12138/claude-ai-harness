@@ -22,15 +22,26 @@ POLL="${POLL:-15}"
 REPO_DIR="${REPO_DIR:-$HOME/claude-ai-harness}"
 SERVER_LOG="${SERVER_LOG:-/tmp/claude-preview.log}"
 
-# Find node via nvm if NODE_BIN not preset
+# Find node via nvm if NODE_BIN not preset.
+# Must match the version that compiled the native better-sqlite3 binary;
+# /usr/bin/node (often v22 on Ubuntu) will fail with ERR_DLOPEN_FAILED
+# when node_modules was built under nvm node v24+.
 if [ -z "${NODE_BIN:-}" ]; then
   if [ -s "$HOME/.nvm/nvm.sh" ]; then
     # shellcheck source=/dev/null
     . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1 || true
+    # `. nvm.sh` only loads functions — explicitly activate default version
+    # so its bin dir is on PATH and `command -v node` returns it.
+    nvm use default >/dev/null 2>&1 || nvm use --lts >/dev/null 2>&1 || true
     NODE_BIN=$(command -v node || true)
+  fi
+  # Final fallback: pick the highest installed nvm version directly.
+  if [ -z "${NODE_BIN:-}" ] && [ -d "$HOME/.nvm/versions/node" ]; then
+    NODE_BIN=$(ls -1d "$HOME/.nvm/versions/node"/v*/bin/node 2>/dev/null | sort -V | tail -1)
   fi
 fi
 : "${NODE_BIN:?node not found — set NODE_BIN or source nvm}"
+echo "[$(date '+%F %T')] using node: $NODE_BIN ($("$NODE_BIN" --version 2>/dev/null))"
 
 cd "$REPO_DIR"
 
