@@ -3064,6 +3064,8 @@ function renderRichDocument(markdown, mode = "document") {
   let inCode = false;
   let codeLang = "";
   let code = [];
+  let inMath = false;
+  let mathLines = [];
 
   const closeList = () => {
     if (inList) { out.push("</ul>"); inList = false; }
@@ -3072,6 +3074,33 @@ function renderRichDocument(markdown, mode = "document") {
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
+
+    if (!inCode) {
+      const trimmed = line.trim();
+      if (trimmed === "$$") {
+        if (inMath) {
+          const mathContent = mathLines.join("\n").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"');
+          out.push(`<div class="math-block">${typeof katex !== "undefined" ? katex.renderToString(mathContent, { displayMode: true, throwOnError: false }) : `<code>$$${escapeHtml(mathContent)}$$</code>`}</div>`);
+          mathLines = [];
+          inMath = false;
+        } else {
+          closeList();
+          inMath = true;
+        }
+        continue;
+      }
+      if (inMath) {
+        mathLines.push(line);
+        continue;
+      }
+      if (trimmed.startsWith("$$") && trimmed.endsWith("$$") && trimmed.length > 4) {
+        closeList();
+        const mathContent = trimmed.slice(2, -2).replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"');
+        out.push(`<div class="math-block">${typeof katex !== "undefined" ? katex.renderToString(mathContent, { displayMode: true, throwOnError: false }) : `<code>$$${escapeHtml(mathContent)}$$</code>`}</div>`);
+        continue;
+      }
+    }
+
     if (line.startsWith("```")) {
       if (inCode) {
         const lang = codeLang;
@@ -3137,9 +3166,17 @@ function renderRichDocument(markdown, mode = "document") {
   return out.join("") || (mode === "document" ? `<p class="empty-doc">暂无内容。</p>` : "");
 }
 
+function renderInlineMath(escapedMath, display) {
+  const math = escapedMath.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"');
+  if (typeof katex === "undefined") return `<code>${display ? "$$" : "$"}${escapeHtml(math)}${display ? "$$" : "$"}</code>`;
+  return katex.renderToString(math, { displayMode: display, throwOnError: false });
+}
+
 function inline(text) {
   return text
     .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\$\$([^$]+?)\$\$/g, (_, m) => renderInlineMath(m, true))
+    .replace(/\$([^$\n]+?)\$/g, (_, m) => renderInlineMath(m, false))
     .replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*\n]+?)\*/g, "<em>$1</em>")
     .replace(/(?<![A-Za-z\d])_([^_\n]+?)_(?![A-Za-z\d])/g, "<em>$1</em>")
