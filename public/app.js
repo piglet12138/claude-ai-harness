@@ -1106,13 +1106,7 @@ function renderMessageActions(message, isStreamingMessage) {
 }
 
 async function submitFeedback(message, feedback, thumbUp, thumbDown) {
-  // Toggle: clicking same button again removes feedback
-  if (message._feedback === feedback) {
-    message._feedback = null;
-    thumbUp.classList.remove("active");
-    thumbDown.classList.remove("active");
-    return;
-  }
+  if (message._feedback === feedback) return;
   message._feedback = feedback;
   thumbUp.classList.toggle("active", feedback === "up");
   thumbDown.classList.toggle("active", feedback === "down");

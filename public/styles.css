@@ -1465,6 +1465,11 @@ img.brand-logo.large {
   cursor: default;
 }
 
+.feedback-btn.active {
+  background: var(--accent-glow);
+  color: var(--accent);
+}
+
 .message.assistant.streaming .message-bubble::after {
   content: "";
   display: inline-block;
