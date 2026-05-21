@@ -17,6 +17,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write   # needed to delete merged claude/issue-* branches at the end
     steps:
       - name: Push to DO and restart service
         env:
@@ -72,3 +74,28 @@ jobs:
           done
           echo "::error::Public site did not return 200 after deploy"
           exit 1
+
+      - name: Clean up merged claude/issue-* branches
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Any claude/issue-* branch whose tip is reachable from main
+          # (status = identical|behind) is now in prod — safe to delete.
+          # Branches still ahead/diverged from main stay (work in flight).
+          set -eu
+          branches=$(gh api "repos/$REPO/branches" --paginate \
+            --jq '.[] | select(.name | startswith("claude/issue-")) | .name')
+          for b in $branches; do
+            status=$(gh api "repos/$REPO/compare/main...$b" --jq '.status' 2>/dev/null || echo "unknown")
+            case "$status" in
+              identical|behind)
+                echo "Deleting merged: $b"
+                gh api -X DELETE "repos/$REPO/git/refs/heads/$b"
+                ;;
+              *)
+                echo "Keeping (status=$status): $b"
+                ;;
+            esac
+          done
