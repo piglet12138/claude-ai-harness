@@ -1,15 +1,17 @@
 name: CI · Check & Local Smoke
 
-# PR / non-main pushes get syntax check + a quick local server smoke
+# Agent / feature pushes get syntax check + a quick local server smoke
 # (start node server.mjs with a dummy env on a free port, curl /, kill).
-# Production deploy is in deploy.yml and only runs on main.
+# Runs on PRs into both `main` and `preview` (the integration branch).
+# Production deploy is in deploy.yml and only runs on push to main.
 
 on:
   push:
     branches-ignore:
       - main
+      - preview
   pull_request:
-    branches: [main]
+    branches: [main, preview]
   workflow_dispatch:
 
 concurrency:
