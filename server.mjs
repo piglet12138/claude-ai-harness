@@ -404,6 +404,10 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", "http://localhost");
 
+    if (req.method === "GET" && url.pathname === "/healthz") {
+      return json(res, { ok: true, ts: Math.floor(Date.now() / 1000) });
+    }
+
     if (req.method === "GET" && url.pathname === "/api/session") {
       const session = readSession(req);
       return json(res, { authenticated: Boolean(session), email: session?.email || "", role: session?.role || "", model });
