@@ -244,6 +244,32 @@
       <div class="timeline">
 
         <div class="entry highlight">
+          <div class="entry-date">2026-05-21</div>
+          <div class="entry-title">
+            <span class="tag tag-feat">feat</span>
+            <span class="zh">UX 体验细节大复刻 claude.ai</span>
+            <span class="en">UX polish pass — closing the gap to claude.ai</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">Markdown 渲染补全（链接 / 有序列表 / 斜体 / 代码块语言标签 + 复制按钮）、代码块语法高亮（12 种语言，无外部依赖）、主题化弹层替换浏览器原生 prompt/confirm、滚动历史时浮现「跳到底部」按钮、空输入框时禁用发送按钮、文件拖拽上传、键盘快捷键（Cmd+N 新对话 / Esc 关面板 / Cmd+K 聚焦输入框）、侧边栏对话搜索与关键词高亮。</span>
+            <span class="en">Full markdown rendering (links / ordered lists / italics / code-block language label + copy button), in-house syntax highlighting (12 languages, zero deps), themed inline modals replacing native prompt/confirm, scroll-to-bottom floating button, disabled send on empty input, file drag-and-drop, keyboard shortcuts (Cmd+N / Esc / Cmd+K), sidebar conversation search with keyword highlight.</span>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">2026-05-21</div>
+          <div class="entry-title">
+            <span class="tag tag-fix">fix</span>
+            <span class="zh">修复代码块路由 + 点赞按钮无反馈</span>
+            <span class="en">Code-block routing + thumbs-up no-feedback fixes</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">Python / JS / CSS 等代码块不再被错误推送到右侧文档面板，现在直接在聊天中渲染（仅 HTML / SVG 走文档预览）。点赞 / 踩按钮加上可见的橙色背景高亮（彩色 emoji 不响应 CSS color，原来的实现看上去毫无变化）。</span>
+            <span class="en">Python / JS / CSS code blocks no longer hijacked into the artifact panel — they now render inline (only HTML / SVG continue to the preview pane). Thumbs-up / down buttons gain a visible orange background tint (color emojis ignore CSS color, so the previous attempt was a visual no-op).</span>
+          </div>
+        </div>
+
+        <div class="entry">
           <div class="entry-date">2026-05-14</div>
           <div class="entry-title">
             <span class="tag tag-feat">feat</span>

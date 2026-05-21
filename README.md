@@ -253,6 +253,32 @@ ssh server 'cd /path/to/app && npm install && pip install openpyxl reportlab pyp
 
 ## 更新日志
 
+### 2026-05-21 — UX 体验细节复刻 & CI/CD agent loop
+
+**UX 改进（一次性补齐 7 项 claude.ai 体验差距）：**
+- Markdown 渲染补全：链接 `[text](url)` 可点击、有序列表 `1.` 渲染成 `<ol>`、`*italic*` / `_italic_` 渲染成 `<em>`、代码块加工具栏（语言标签 + 一键复制 + 「已复制」反馈）
+- **代码块语法高亮**：自研轻量 tokenizer，覆盖 12 种语言（js/ts/jsx/tsx/json/html/css/py/sh/bash/sql/md），双主题适配，零外部依赖
+- **主题化弹层**：用 `showPromptModal` / `showConfirmModal` 替换浏览器原生 `prompt()` / `confirm()`，支持 Esc 取消 / Enter 确认 / 点击遮罩关闭 / 自动聚焦
+- **跳到底部浮动按钮**：滚动 > 200px 时浮现，平滑滚动到底，有新消息时按钮上加未读小红点
+- **空输入禁用发送**：输入框为空时发送按钮变灰 + cursor: not-allowed，输入有字符立刻恢复
+- **拖拽上传**：拖文件到聊天区域显示虚线提示框，落下后自动触发上传
+- **键盘快捷键**：Cmd/Ctrl+N 新对话、Esc 关闭文档面板、Cmd/Ctrl+K 聚焦输入框
+- **侧边栏对话搜索**：按 title + 消息内容 substring 实时过滤，命中关键词在 title 里高亮
+
+**Bug 修复：**
+- 代码块路由 bug：`looksLikeRunnableArtifact` 检测过宽导致 Python / JS / CSS 代码块被错误推送到右侧文档面板（且面板对 code 类型禁用预览，用户两边都看不到）。修复后只 HTML / SVG 走文档面板，其他代码块直接在聊天中渲染
+- 点赞按钮无反馈：旧实现只给 `.feedback-btn.active` 加 `color: var(--accent)`，但彩色 emoji `👍 👎` 不响应 CSS color 属性，按钮看上去毫无变化。修复加上 `background: var(--accent-glow)` 让背景色变化可见
+- `deleteThread` 在 `confirm()` 之前就发出了 DELETE 请求（即使用户点取消也会删）—— 改成先确认再请求
+
+**CI/CD 工程化：**
+- 新增 GitHub Actions 三件套：`ci.yml`（PR / 推送时 npm check + 本地 server smoke）、`deploy.yml`（push 到 main 自动 SSH 上 DO + git pull + systemctl restart）、`claude.yml`（@claude 触发 agent 干活）
+- `@claude` 在 issue 评论里 @ 一下就能让 Claude Code Agent 自动读 issue、改代码、推分支
+- 引入 **`dev` 集成分支**：agent feature 分支 PR 进 dev，本地 :3141 跟踪 dev 做人工 QA，QA 通过后 `git merge --ff-only dev` 到 main 触发 deploy。main = prod 真相，只通过 promote 前进
+- 分支保护：main 要求 PR + CI 通过 + admin 可绕过；dev 只要求 CI 通过（不强求 review）
+- 新增 `GET /healthz` 端点供 CI 和监控用，返回 `{ ok: true, ts: <unix> }`
+
+---
+
 ### 2026-05-13 — Office 文件生成 & 项目改名
 
 **项目改名：** `lite-claude-ui` → `claude-ai-harness`，突出 Agent harness 定位而非 UI。
