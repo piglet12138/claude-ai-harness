@@ -2794,7 +2794,7 @@ function looksLikeDocument(text) {
 }
 
 function looksLikeRunnableArtifact(text) {
-  return /```(html|svg|xml|javascript|js|css|tsx|jsx|vue|python|py)\b/i.test(text) || /<!doctype html|<html[\s>]|<svg[\s>]/i.test(text);
+  return /```(html|svg)\b/i.test(text) || /<!doctype html|<html[\s>]|<svg[\s>]/i.test(text);
 }
 
 function extractArtifact(content, thread) {
@@ -2903,7 +2903,7 @@ function displayAssistantMessage(text) {
   }
   if (!looksLikeRunnableArtifact(text)) return stripArtifactMetadata(text);
   const clean = stripArtifactMetadata(text)
-    .replace(/```(?:html|svg|xml|javascript|js|css|tsx|jsx|vue|python|py)[\s\S]*?```/gi, "")
+    .replace(/```(?:html|svg)[\s\S]*?```/gi, "")
     .replace(/<!doctype html[\s\S]*<\/html>/gi, "")
     .replace(/<html[\s\S]*<\/html>/gi, "")
     .replace(/<svg[\s\S]*<\/svg>/gi, "")
