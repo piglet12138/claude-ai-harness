@@ -23,6 +23,9 @@ db.pragma("journal_mode = WAL");
 db.pragma("synchronous = NORMAL");
 db.pragma("foreign_keys = ON");
 
+// Migration: add starred column to existing databases
+try { db.exec("ALTER TABLE threads ADD COLUMN starred INTEGER DEFAULT 0"); } catch {}
+
 // ---------------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------------
@@ -49,6 +52,7 @@ db.exec(`
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title TEXT DEFAULT '新对话',
     archived INTEGER DEFAULT 0,
+    starred INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now', '+8 hours')),
     updated_at TEXT DEFAULT (datetime('now', '+8 hours'))
   );
@@ -147,14 +151,14 @@ const stmts = {
   cleanExpiredSessions: db.prepare("DELETE FROM sessions WHERE expires_at < ?"),
 
   // Threads
-  listThreads: db.prepare("SELECT id, title, archived, created_at, updated_at FROM threads WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100"),
+  listThreads: db.prepare("SELECT id, title, archived, starred, created_at, updated_at FROM threads WHERE user_id = ? ORDER BY starred DESC, updated_at DESC LIMIT 100"),
   listAllThreads: db.prepare(`SELECT t.id, t.user_id, u.email, t.title, t.created_at, t.updated_at,
     (SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.id) as msg_count
     FROM threads t LEFT JOIN users u ON t.user_id = u.id ORDER BY t.updated_at DESC`),
   getThread: db.prepare("SELECT * FROM threads WHERE id = ? AND user_id = ?"),
   getThreadById: db.prepare("SELECT * FROM threads WHERE id = ?"),
-  insertThread: db.prepare("INSERT INTO threads (id, user_id, title, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"),
-  updateThread: db.prepare("UPDATE threads SET title = ?, archived = ?, updated_at = datetime('now', '+8 hours') WHERE id = ? AND user_id = ?"),
+  insertThread: db.prepare("INSERT INTO threads (id, user_id, title, archived, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
+  updateThread: db.prepare("UPDATE threads SET title = ?, archived = ?, starred = ?, updated_at = datetime('now', '+8 hours') WHERE id = ? AND user_id = ?"),
   deleteThread: db.prepare("DELETE FROM threads WHERE id = ? AND user_id = ?"),
 
   // Messages
@@ -235,11 +239,11 @@ export const dbThreads = {
   listAll() { return stmts.listAllThreads.all(); },
   get(id, userId) { return stmts.getThread.get(id, userId); },
   getById(id) { return stmts.getThreadById.get(id); },
-  create(id, userId, title = "新对话", archived = 0, createdAt = null, updatedAt = null) {
+  create(id, userId, title = "新对话", archived = 0, starred = 0, createdAt = null, updatedAt = null) {
     const now = createdAt || nowSGT();
-    stmts.insertThread.run(id, userId, title, archived ? 1 : 0, now, updatedAt || now);
+    stmts.insertThread.run(id, userId, title, archived ? 1 : 0, starred ? 1 : 0, now, updatedAt || now);
   },
-  update(id, userId, title, archived) { stmts.updateThread.run(title, archived ? 1 : 0, id, userId); },
+  update(id, userId, title, archived, starred = 0) { stmts.updateThread.run(title, archived ? 1 : 0, starred ? 1 : 0, id, userId); },
   delete(id, userId) { stmts.deleteThread.run(id, userId); },
 };
 
@@ -341,7 +345,7 @@ export const dbBulkImport = db.transaction((userId, threads) => {
   for (const thread of threads) {
     // Insert thread
     const now = thread.updatedAt || thread.createdAt || nowSGT();
-    stmts.insertThread.run(thread.id, userId, thread.title || "新对话", thread.archived ? 1 : 0, thread.createdAt || now, now);
+    stmts.insertThread.run(thread.id, userId, thread.title || "新对话", thread.archived ? 1 : 0, thread.starred ? 1 : 0, thread.createdAt || now, now);
 
     // Insert messages
     let seq = 0;

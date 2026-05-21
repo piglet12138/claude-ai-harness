@@ -44,6 +44,8 @@ const els = {
   logout: document.querySelector("#logout"),
   newChat: document.querySelector("#newChat"),
   threadList: document.querySelector("#threadList"),
+  starredList: document.querySelector("#starredList"),
+  starredLabel: document.querySelector("#starredLabel"),
   documentList: document.querySelector("#documentList"),
   messages: document.querySelector("#messages"),
   hero: document.querySelector("#hero"),
@@ -497,6 +499,7 @@ async function showChat() {
         id: t.id,
         title: t.title,
         archived: !!t.archived,
+        starred: !!t.starred,
         createdAt: t.created_at,
         updatedAt: t.updated_at,
         messages: local?.messages || [], // lazy-loaded
@@ -559,6 +562,7 @@ async function refreshActiveThread() {
           id: t.id,
           title: t.title,
           archived: !!t.archived,
+          starred: !!t.starred,
           createdAt: t.created_at,
           updatedAt: t.updated_at,
           messages: local?.messages || [],
@@ -798,51 +802,87 @@ function initSidebarSearch() {
   });
 }
 
+function toggleStarThread(id) {
+  const thread = state.threads.find(t => t.id === id);
+  if (!thread) return;
+  thread.starred = !thread.starred;
+  saveThreads();
+  syncThreadMeta(id, { starred: thread.starred });
+  render();
+}
+
+function buildThreadItem(thread, query) {
+  const item = document.createElement("div");
+  item.className = `thread-item${thread.id === state.activeId ? " active" : ""}`;
+
+  const label = document.createElement("span");
+  label.className = "thread-label";
+  const titleText = thread.title || "新对话";
+  if (query) {
+    label.innerHTML = highlightText(titleText, query);
+  } else {
+    label.textContent = titleText;
+  }
+  item.append(label);
+
+  const starBtn = document.createElement("button");
+  starBtn.className = "thread-star-btn" + (thread.starred ? " starred" : "");
+  starBtn.title = thread.starred ? "取消收藏" : "收藏";
+  starBtn.textContent = thread.starred ? "★" : "☆";
+  starBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleStarThread(thread.id); });
+  item.append(starBtn);
+
+  const more = document.createElement("button");
+  more.className = "thread-more-btn";
+  more.textContent = "⋯";
+  more.title = "更多操作";
+  more.addEventListener("click", (e) => {
+    e.stopPropagation();
+    showContextMenu(e.currentTarget, [
+      { label: thread.starred ? "取消收藏" : "收藏", action: () => toggleStarThread(thread.id) },
+      { label: "重命名", action: () => renameThread(thread.id) },
+      { label: "删除", action: () => deleteThread(thread.id), danger: true },
+    ]);
+  });
+  item.append(more);
+
+  item.addEventListener("click", (e) => {
+    if (e.target.closest(".thread-more-btn") || e.target.closest(".thread-star-btn")) return;
+    state.activeId = thread.id;
+    const docs = thread.documents || [];
+    state.activeDocId = docs[0]?.id || "";
+    state.docOpen = docs.length > 0 && state.docOpen;
+    document.body.classList.remove("sidebar-open");
+    render();
+    loadThreadData(thread.id, true);
+  });
+
+  return item;
+}
+
 function renderThreads() {
   els.threadList.innerHTML = "";
+  els.starredList.innerHTML = "";
   const query = state.searchQuery.trim().toLowerCase();
-  const visible = state.threads.filter((t) => !t.archived && (!query || threadMatchesSearch(t, query)));
-  for (const thread of visible) {
-    const item = document.createElement("div");
-    item.className = `thread-item${thread.id === state.activeId ? " active" : ""}`;
-    const label = document.createElement("span");
-    label.className = "thread-label";
-    const titleText = thread.title || "新对话";
-    if (query) {
-      label.innerHTML = highlightText(titleText, query);
-    } else {
-      label.textContent = titleText;
+
+  // Starred section
+  const starredThreads = state.threads.filter((t) => t.starred && !t.archived && (!query || threadMatchesSearch(t, query)));
+  if (starredThreads.length) {
+    els.starredLabel.classList.remove("hidden");
+    for (const thread of starredThreads) {
+      els.starredList.append(buildThreadItem(thread, query));
     }
-    item.append(label);
-
-    const more = document.createElement("button");
-    more.className = "thread-more-btn";
-    more.textContent = "⋯";
-    more.title = "更多操作";
-    more.addEventListener("click", (e) => {
-      e.stopPropagation();
-      showContextMenu(e.currentTarget, [
-        { label: "重命名", action: () => renameThread(thread.id) },
-        { label: "删除", action: () => deleteThread(thread.id), danger: true },
-      ]);
-    });
-    item.append(more);
-
-    item.addEventListener("click", (e) => {
-      if (e.target.closest(".thread-more-btn")) return;
-      state.activeId = thread.id;
-      // Switch to this thread's first document
-      const docs = thread.documents || [];
-      state.activeDocId = docs[0]?.id || "";
-      state.docOpen = docs.length > 0 && state.docOpen;
-      document.body.classList.remove("sidebar-open");
-      render();
-      // Load/refresh from server for cross-device sync
-      loadThreadData(thread.id, true);
-    });
-    els.threadList.append(item);
+  } else {
+    els.starredLabel.classList.add("hidden");
   }
-  if (visible.length === 0 && query) {
+
+  // Recent section (non-starred, non-archived)
+  const visible = state.threads.filter((t) => !t.starred && !t.archived && (!query || threadMatchesSearch(t, query)));
+  for (const thread of visible) {
+    els.threadList.append(buildThreadItem(thread, query));
+  }
+
+  if (visible.length === 0 && starredThreads.length === 0 && query) {
     const empty = document.createElement("div");
     empty.className = "thread-item thread-search-empty";
     empty.textContent = "没有匹配的对话";
