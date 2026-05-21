@@ -1107,17 +1107,18 @@ function renderMessageActions(message, isStreamingMessage) {
 
 async function submitFeedback(message, feedback, thumbUp, thumbDown) {
   // Toggle: clicking same button again removes feedback
-  if (message._feedback === feedback) {
+  const removing = message._feedback === feedback;
+  if (removing) {
     message._feedback = null;
     thumbUp.classList.remove("active");
     thumbDown.classList.remove("active");
-    return;
+  } else {
+    message._feedback = feedback;
+    thumbUp.classList.toggle("active", feedback === "up");
+    thumbDown.classList.toggle("active", feedback === "down");
   }
-  message._feedback = feedback;
-  thumbUp.classList.toggle("active", feedback === "up");
-  thumbDown.classList.toggle("active", feedback === "down");
   try {
-    const rating = feedback === "up" ? 1 : -1;
+    const rating = removing ? 0 : (feedback === "up" ? 1 : -1);
     await fetch("/api/messages/" + encodeURIComponent(message.id) + "/rate", {
       method: "POST",
       headers: { "content-type": "application/json" },

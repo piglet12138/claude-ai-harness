@@ -717,10 +717,14 @@ const server = http.createServer(async (req, res) => {
       const messageId = parts[3];
       const body = await readJson(req, 1024);
       const rating = body?.rating;
-      if (rating !== 1 && rating !== -1) return json(res, { error: "rating must be 1 or -1" }, 400);
+      if (rating !== 1 && rating !== -1 && rating !== 0) return json(res, { error: "rating must be 1, -1, or 0" }, 400);
       const threadId = body?.thread_id;
       if (!threadId) return json(res, { error: "thread_id required" }, 400);
-      dbRatings.upsert(messageId, threadId, session.userId, rating);
+      if (rating === 0) {
+        dbRatings.delete(messageId, session.userId);
+      } else {
+        dbRatings.upsert(messageId, threadId, session.userId, rating);
+      }
       return json(res, { ok: true });
     }
 
