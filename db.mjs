@@ -198,7 +198,6 @@ const stmts = {
   // Ratings
   upsertRating: db.prepare(`INSERT INTO ratings (message_id, thread_id, user_id, rating) VALUES (?, ?, ?, ?)
     ON CONFLICT(message_id, user_id) DO UPDATE SET rating = excluded.rating`),
-  deleteRating: db.prepare("DELETE FROM ratings WHERE message_id = ? AND user_id = ?"),
   getRating: db.prepare("SELECT rating FROM ratings WHERE message_id = ? AND user_id = ?"),
   getThreadRatings: db.prepare("SELECT message_id, rating FROM ratings WHERE thread_id = ?"),
   allRatings: db.prepare(`SELECT r.*, u.email, m.content as message_content, m.thread_id
@@ -331,7 +330,6 @@ export const dbTelemetry = {
 
 export const dbRatings = {
   upsert(messageId, threadId, userId, rating) { stmts.upsertRating.run(messageId, threadId, userId, rating); },
-  delete(messageId, userId) { stmts.deleteRating.run(messageId, userId); },
   get(messageId, userId) { return stmts.getRating.get(messageId, userId); },
   getThreadRatings(threadId) { return stmts.getThreadRatings.all(threadId); },
   all() { return stmts.allRatings.all(); },

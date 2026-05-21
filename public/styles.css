@@ -1466,6 +1466,7 @@ img.brand-logo.large {
 }
 
 .feedback-btn.active {
+  background: var(--accent-glow);
   color: var(--accent);
 }
 
