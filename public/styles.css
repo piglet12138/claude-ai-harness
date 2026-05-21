@@ -3118,3 +3118,58 @@ img.brand-logo.large {
 .modal-btn-confirm.danger:hover {
   background: #b83030;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Scroll-to-bottom floating button
+   ═══════════════════════════════════════════════════════════════ */
+
+.scroll-bottom-btn {
+  grid-row: 1;
+  grid-column: 1;
+  align-self: end;
+  justify-self: end;
+  z-index: 10;
+  position: relative;
+  width: 40px;
+  height: 40px;
+  margin: 0 24px 16px 0;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease, background 0.12s;
+}
+
+.scroll-bottom-btn:hover {
+  background: var(--panel);
+}
+
+.scroll-bottom-btn.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.scroll-unread {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+}
+
+.scroll-unread.hidden {
+  display: none;
+}

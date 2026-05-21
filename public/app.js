@@ -205,6 +205,10 @@ function wireEvents() {
   });
   els.sidebarToggle.addEventListener("click", () => document.body.classList.toggle("sidebar-open"));
 
+  els.prompt.addEventListener("input", updateSendButton);
+  initScrollBottomBtn();
+  updateSendButton();
+
   document.querySelectorAll(".starter").forEach((button) => {
     button.addEventListener("click", () => {
       els.prompt.value = button.dataset.prompt || "";
@@ -1554,6 +1558,7 @@ function renderAttachments() {
     pill.append(remove);
     els.attachmentBar.append(pill);
   }
+  updateSendButton();
 }
 
 function renderSearchToggle() {
@@ -1649,8 +1654,14 @@ function updateStreamingMessage(assistant) {
     }
   }
 
-  // Scroll to bottom
-  els.messages.scrollTop = els.messages.scrollHeight;
+  // Scroll to bottom only if user is near the bottom; otherwise show unread badge
+  const distFromBottom = els.messages.scrollHeight - els.messages.scrollTop - els.messages.clientHeight;
+  if (distFromBottom <= 200) {
+    els.messages.scrollTop = els.messages.scrollHeight;
+  } else if (els.scrollBottomBtn) {
+    els.scrollBottomBtn.querySelector(".scroll-unread")?.classList.remove("hidden");
+    els.scrollBottomBtn.classList.add("visible");
+  }
 }
 
 function renderDocumentPanel() {
@@ -1780,11 +1791,44 @@ function updateSendButton() {
     els.send.classList.add("stop-mode");
     els.send.setAttribute("aria-label", "停止生成");
     els.send.innerHTML = '<span class="icon stop-icon" aria-hidden="true"></span>';
+    els.send.style.opacity = "";
+    els.send.style.cursor = "";
   } else {
     els.send.classList.remove("stop-mode");
     els.send.setAttribute("aria-label", "发送");
     els.send.innerHTML = '<span class="icon arrow-up" aria-hidden="true"></span>';
     els.send.disabled = false;
+    const isEmpty = !els.prompt.value.trim() && !state.attachments.length;
+    els.send.style.opacity = isEmpty ? "0.4" : "";
+    els.send.style.cursor = isEmpty ? "not-allowed" : "";
+  }
+}
+
+function initScrollBottomBtn() {
+  const btn = document.createElement("button");
+  btn.id = "scrollBottomBtn";
+  btn.className = "scroll-bottom-btn";
+  btn.type = "button";
+  btn.setAttribute("aria-label", "跳到底部");
+  btn.innerHTML = '↓<span class="scroll-unread hidden"></span>';
+  els.messages.parentElement.append(btn);
+  els.scrollBottomBtn = btn;
+
+  els.messages.addEventListener("scroll", updateScrollBottomBtn);
+  btn.addEventListener("click", () => {
+    els.messages.scrollTo({ top: els.messages.scrollHeight, behavior: "smooth" });
+    btn.querySelector(".scroll-unread").classList.add("hidden");
+    btn.classList.remove("visible");
+  });
+}
+
+function updateScrollBottomBtn() {
+  if (!els.scrollBottomBtn) return;
+  const distFromBottom = els.messages.scrollHeight - els.messages.scrollTop - els.messages.clientHeight;
+  const isScrolledUp = distFromBottom > 200;
+  els.scrollBottomBtn.classList.toggle("visible", isScrolledUp);
+  if (!isScrolledUp) {
+    els.scrollBottomBtn.querySelector(".scroll-unread")?.classList.add("hidden");
   }
 }
 
