@@ -630,6 +630,7 @@ const server = http.createServer(async (req, res) => {
       if (!session) return json(res, { error: "Unauthorized" }, 401);
       const body = await readJson(req, 10 * 1024 * 1024); // 10MB for images
       const text = String(body?.text || "").trim().slice(0, 2000);
+      const threadId = typeof body?.threadId === 'string' ? body.threadId.slice(0, 200) : null;
       const rawImages = Array.isArray(body?.images) ? body.images.slice(0, 5) : [];
       if (!text && !rawImages.length) return json(res, { error: "内容不能为空" }, 400);
       // Save images to disk, store paths in report
@@ -648,15 +649,16 @@ const server = http.createServer(async (req, res) => {
       const reportsFile = path.join(root, "bug-reports.json");
       let reports = [];
       try { reports = JSON.parse(await fs.readFile(reportsFile, "utf8")); } catch {}
-      reports.push({ id: crypto.randomUUID(), email: session.email, text, images: imagePaths, userAgent: String(req.headers["user-agent"] || "").slice(0, 200), createdAt: new Date().toISOString() });
+      reports.push({ id: crypto.randomUUID(), email: session.email, text, images: imagePaths, ...(threadId ? { threadId } : {}), userAgent: String(req.headers["user-agent"] || "").slice(0, 200), createdAt: new Date().toISOString() });
       await fs.writeFile(reportsFile, JSON.stringify(reports, null, 2), "utf8");
       // Send email notification with images (non-blocking)
       const siteUrl = `https://claude.yaoyuheng2001.me`;
       const imgsHtml = imagePaths.map(p => `<p><img src="${siteUrl}${p}" style="max-width:600px;border-radius:8px;border:1px solid #ddd" /></p>`).join("");
+      const threadHtml = threadId ? `<p style="font-size:13px;color:#555">Thread: <a href="${siteUrl}/admin?thread=${encodeURIComponent(threadId)}">${threadId}</a></p>` : '';
       sendNotifyEmail(
         `[Bug Report] ${text.slice(0, 50)}`,
         null,
-        `<div style="font-family:sans-serif;max-width:640px"><p style="color:#666">From: ${session.email}</p><p style="white-space:pre-wrap;line-height:1.6">${text.replace(/</g,"&lt;")}</p>${imgsHtml}<hr style="border:none;border-top:1px solid #eee;margin:20px 0"><p style="font-size:12px;color:#999"><a href="${siteUrl}/admin">管理后台</a></p></div>`
+        `<div style="font-family:sans-serif;max-width:640px"><p style="color:#666">From: ${session.email}</p>${threadHtml}<p style="white-space:pre-wrap;line-height:1.6">${text.replace(/</g,"&lt;")}</p>${imgsHtml}<hr style="border:none;border-top:1px solid #eee;margin:20px 0"><p style="font-size:12px;color:#999"><a href="${siteUrl}/admin">管理后台</a></p></div>`
       ).catch(() => {});
       return json(res, { ok: true });
     }
