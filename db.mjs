@@ -129,11 +129,22 @@ db.exec(`
     UNIQUE(message_id, user_id)
   );
   CREATE INDEX IF NOT EXISTS idx_ratings_thread ON ratings(thread_id);
+
+  CREATE TABLE IF NOT EXISTS tool_result_summary (
+    content_hash TEXT PRIMARY KEY,
+    summary TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now', '+8 hours'))
+  );
 `);
 
 // Migrations for existing databases
 try { db.exec("ALTER TABLE telemetry ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE telemetry ADD COLUMN cache_read_tokens INTEGER DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE telemetry ADD COLUMN compressed_from_tokens INTEGER DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE telemetry ADD COLUMN compressed_to_tokens INTEGER DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE telemetry ADD COLUMN haiku_calls INTEGER DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE telemetry ADD COLUMN haiku_input_tokens INTEGER DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE telemetry ADD COLUMN haiku_output_tokens INTEGER DEFAULT 0"); } catch {}
 
 // ---------------------------------------------------------------------------
 // Prepared statements
@@ -197,13 +208,17 @@ const stmts = {
   insertPv: db.prepare("INSERT INTO pv (path, referrer, screen, fp) VALUES (?, ?, ?, ?)"),
 
   // Telemetry
-  insertTelemetry: db.prepare("INSERT INTO telemetry (user_id, thread_id, tool_calls, input_tokens, output_tokens, latency_ms, message_preview, model, rounds, cache_creation_tokens, cache_read_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+  insertTelemetry: db.prepare("INSERT INTO telemetry (user_id, thread_id, tool_calls, input_tokens, output_tokens, latency_ms, message_preview, model, rounds, cache_creation_tokens, cache_read_tokens, compressed_from_tokens, compressed_to_tokens, haiku_calls, haiku_input_tokens, haiku_output_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
   allTelemetry: db.prepare("SELECT t.*, u.email FROM telemetry t LEFT JOIN users u ON t.user_id = u.id ORDER BY t.created_at DESC"),
   telemetryStats: db.prepare(`SELECT COUNT(*) as total_chats,
     SUM(input_tokens) as total_input, SUM(output_tokens) as total_output,
     AVG(latency_ms) as avg_latency_ms,
     SUM(json_array_length(tool_calls)) as total_tool_calls
     FROM telemetry`),
+
+  // Tool result summary cache
+  getToolResultSummary: db.prepare("SELECT summary FROM tool_result_summary WHERE content_hash = ?"),
+  insertToolResultSummary: db.prepare("INSERT OR REPLACE INTO tool_result_summary (content_hash, summary) VALUES (?, ?)"),
 
   // Ratings
   upsertRating: db.prepare(`INSERT INTO ratings (message_id, thread_id, user_id, rating) VALUES (?, ?, ?, ?)
@@ -331,11 +346,16 @@ export const dbPv = {
 };
 
 export const dbTelemetry = {
-  record(userId, threadId, toolCalls, inputTokens, outputTokens, latencyMs, messagePreview, model, rounds, cacheCreationTokens = 0, cacheReadTokens = 0) {
-    stmts.insertTelemetry.run(userId, threadId, JSON.stringify(toolCalls), inputTokens, outputTokens, latencyMs, messagePreview, model, rounds, cacheCreationTokens, cacheReadTokens);
+  record(userId, threadId, toolCalls, inputTokens, outputTokens, latencyMs, messagePreview, model, rounds, cacheCreationTokens = 0, cacheReadTokens = 0, compressedFromTokens = 0, compressedToTokens = 0, haikuCalls = 0, haikuInputTokens = 0, haikuOutputTokens = 0) {
+    stmts.insertTelemetry.run(userId, threadId, JSON.stringify(toolCalls), inputTokens, outputTokens, latencyMs, messagePreview, model, rounds, cacheCreationTokens, cacheReadTokens, compressedFromTokens, compressedToTokens, haikuCalls, haikuInputTokens, haikuOutputTokens);
   },
   all() { return stmts.allTelemetry.all().map(r => ({ ...r, tool_calls: JSON.parse(r.tool_calls || '[]') })); },
   stats() { return stmts.telemetryStats.get(); },
+};
+
+export const dbToolResultSummary = {
+  get(hash) { return stmts.getToolResultSummary.get(hash)?.summary || null; },
+  set(hash, summary) { stmts.insertToolResultSummary.run(hash, summary); },
 };
 
 export const dbRatings = {
