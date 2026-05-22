@@ -177,6 +177,15 @@ const agenticSystemPrompt = [
   "",
   "不用 create_artifact：普通问答、解释说明、短回复、简单列表、表格对比（直接写对话）。",
   "",
+  "## 修改已有文档（严格遵守）",
+  "",
+  "当用户说「改一下」「修改」「调整」「更新」「优化」或引用之前生成的内容时：",
+  "1. **先调用 `list_artifacts`** 查看当前对话里有哪些已保存文档",
+  "2. 找到相关文档后，**调用 `get_artifact(id)`** 读取完整内容",
+  "3. 基于现有内容进行**增量修改**，再调用 `create_artifact`（标题相同走 upsert，不新建重复文档）",
+  "4. **绝不假设「沙箱临时、文档已丢失」**——已生成的文档全部持久化在数据库中",
+  "5. 只有 `list_artifacts` 找不到匹配文档时，才走「重新生成」路径，并明确告知用户",
+  "",
   "## 交互式选项",
   "",
   "你有两种交互格式可以使用：",
@@ -338,6 +347,26 @@ const anthropicTools = [
         file_path: { type: "string", description: "Suggested filename, e.g. index.html, report.md" },
       },
       required: ["title", "type", "content"],
+    },
+  },
+  {
+    name: "list_artifacts",
+    description: "List all artifacts/documents saved in the current conversation thread. Call this first whenever the user asks to modify, update, or reference a previously created document — to check if it exists and get its ID. Do NOT assume documents are gone just because the sandbox is temporary; all artifacts are persisted in the database.",
+    input_schema: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "get_artifact",
+    description: "Get the full content of a specific artifact/document by its ID. Use after list_artifacts to read an existing document before making incremental edits to it.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The artifact ID from list_artifacts" },
+      },
+      required: ["id"],
     },
   },
 ];
@@ -1180,7 +1209,7 @@ async function chat(req, res) {
               res.write(`event: tool_start\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, args: toolDisplayArgs(tc.name, tc.input) })}\n\n`);
               console.log(`[Chat] Executing tool: ${tc.name}`);
               collectedToolCalls.push(tc.name);
-        const toolResult = await executeTool(tc.name, tc.input, res);
+        const toolResult = await executeTool(tc.name, tc.input, res, chatThreadId);
               if (tc.name === "create_artifact") {
                 const retryContent = String(tc.input.content || "");
                 if (retryContent.trim().length >= 20) {
@@ -1235,7 +1264,7 @@ async function chat(req, res) {
         res.write(`event: tool_start\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, args: toolDisplayArgs(tc.name, tc.input) })}\n\n`);
         res.flush?.();
 
-        const toolResult = await executeTool(tc.name, tc.input, res);
+        const toolResult = await executeTool(tc.name, tc.input, res, chatThreadId);
 
         if (tc.name === "create_artifact") {
           if (toolResult.error) {
@@ -1534,7 +1563,7 @@ async function consumeAnthropicStream(body, res) {
 // ---------------------------------------------------------------------------
 // Tool execution dispatcher
 // ---------------------------------------------------------------------------
-async function executeTool(name, args, res = null) {
+async function executeTool(name, args, res = null, threadId = null) {
   switch (name) {
     case "web_search": {
       const query = String(args?.query || "").trim();
@@ -1629,6 +1658,20 @@ async function executeTool(name, args, res = null) {
         summary: `已创建「${title}」`,
         content: `Artifact "${title}" has been created and is now visible in the user's preview panel.`,
       };
+    }
+    case "list_artifacts": {
+      if (!threadId) return { summary: "无可用对话", content: "No thread ID available. This tool can only be used within an active conversation." };
+      const docs = dbDocuments.list(threadId);
+      if (!docs.length) return { summary: "无已保存文档", content: "No artifacts found in this thread." };
+      const list = docs.map(d => `- ID: ${d.id}\n  标题: ${d.title}\n  类型: ${d.type}\n  更新时间: ${d.updated_at}`).join("\n\n");
+      return { summary: `${docs.length} 个文档`, content: `当前对话已保存的文档（共 ${docs.length} 个）：\n\n${list}` };
+    }
+    case "get_artifact": {
+      const artId = String(args?.id || "").trim();
+      if (!artId) return { summary: "缺少 ID", content: "No artifact ID provided." };
+      const doc = dbDocuments.get(artId);
+      if (!doc) return { summary: "未找到", content: `Artifact with ID "${artId}" not found.` };
+      return { summary: `「${doc.title}」`, content: `标题: ${doc.title}\n类型: ${doc.type}\n更新时间: ${doc.updated_at}\n\n${doc.content}` };
     }
     default:
       return { summary: "未知工具", content: `Unknown tool: ${name}` };
@@ -1734,6 +1777,8 @@ function toolDisplayArgs(name, args) {
   if (name === "run_code") return { language: args?.language, code: String(args?.code || "").slice(0, 80) };
   if (name === "generate_long_document") return { topic: args?.topic, pages: args?.pages };
   if (name === "create_artifact") return { title: args?.title, type: args?.type };
+  if (name === "list_artifacts") return {};
+  if (name === "get_artifact") return { id: args?.id };
   return {};
 }
 
