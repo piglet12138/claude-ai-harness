@@ -133,22 +133,37 @@ const agenticSystemPrompt = [
   "  生成的 .docx/.xlsx/.pptx/.pdf/.csv 文件会自动被捕获并提供下载链接。",
   "  **重要：文件必须保存在当前目录，只写文件名，不要用绝对路径。** 如 'report.docx' 而非 '/tmp/report.docx'。",
   "- generate_long_document：生成长篇报告/白皮书/论文。多个子Agent并行撰写，支持50-100页。",
-  "- create_artifact：创建普通文档/网页/代码，显示在右侧面板。适合10页以内的内容。",
+  "- create_artifact：创建可显示/可下载的文档/网页/代码，在右侧面板显示。**只在用户明确要求时使用。**",
+  "",
+  "## 默认回答策略（严格遵守）",
+  "**核心原则：默认在对话里直接回答，除非用户明确要求生成文档。**",
+  "",
+  "直接在对话中回答：一切问答、解释、分析、列表、表格、对比、建议等，无论内容多长。",
+  "**禁止**主动调用 create_artifact 回答普通问题，即使答案很长，也要直接写在对话里。",
+  "",
+  "## 何时询问是否需要文档",
+  "如果内容**同时满足**以下两个条件，先反问用户：",
+  "- 内容明显适合做成独立文档（长篇对比分析 / 详细报告 / 完整方案 / 多表格汇总）",
+  "- 用户没有明确要求「生成文档 / 报告 / 白皮书 / artifact」",
+  "反问格式：「这个内容需要做成可下载的文档吗，还是直接在对话里回答？」",
+  "",
+  "## 何时直接调用 create_artifact（无需反问）",
+  "仅当用户**明确说**「生成文档」「做成报告」「写一份白皮书」「创建 artifact」「制作网页」「输出代码文件」等时，直接调用 create_artifact。",
   "",
   "## 何时用 generate_long_document vs create_artifact（严格遵守）",
   "- 用户要求「完整报告」「全景报告」「白皮书」「详细文档」「至少X页」「长文档」→ **必须用 generate_long_document**",
   "- 用户要求 20 页以上、或明确说「完整」「全面」「详细」「深度」→ **必须用 generate_long_document**",
-  "- 普通博客、短文档、代码、网页 → 用 create_artifact",
+  "- 普通博客、短文档、代码文件、网页 → 用 create_artifact",
   "- **绝对不要**用 create_artifact 来生成需要 20 页以上的内容，它无法生成那么长的文档",
   "",
-  "## create_artifact 规则",
+  "## create_artifact 规则（仅在用户明确要求时执行）",
   "1. 聊天中只用 1-2 句话说明意图",
   "2. 调用 create_artifact 生成完整内容（文档至少2000字，HTML要美观完整，代码要可运行）",
   "3. 之后用 1 句话收尾",
   "4. 绝不在聊天正文中写出文档全文内容",
+  "5. content 字段必须有实质内容（至少20字符），空内容或过短内容会被服务端拒绝",
   "",
-  "必须用 create_artifact：写文档/报告/方案/邮件、做网页/可视化、写代码文件（10页以内）。",
-  "不用：普通问答、短回复、简单列表。",
+  "不用 create_artifact：普通问答、解释说明、短回复、简单列表、表格对比（直接写对话）。",
   "",
   "## 交互式选项",
   "",
@@ -296,7 +311,7 @@ const anthropicTools = [
   },
   {
     name: "create_artifact",
-    description: "Create or update a rich document or interactive artifact displayed in the user's side panel. Use for: long-form documents, reports, HTML pages, interactive web apps, data visualizations, SVG graphics, code files. Do NOT use for short answers that fit in a chat message.",
+    description: "Create a document or interactive artifact shown in the user's side panel. ONLY call this tool when the user explicitly requests creating/generating a document, report, HTML page, code file, or other artifact. Do NOT use to answer questions, even long ones — default to replying in the chat instead. Do NOT proactively create artifacts without an explicit user request.",
     input_schema: {
       type: "object",
       properties: {
@@ -1152,9 +1167,14 @@ async function chat(req, res) {
               collectedToolCalls.push(tc.name);
         const toolResult = await executeTool(tc.name, tc.input, res);
               if (tc.name === "create_artifact") {
-                const artifactDoc = { title: tc.input.title || "Artifact", type: tc.input.type || "html", content: tc.input.content || "", language: tc.input.language || "", description: tc.input.description || "", file_path: tc.input.file_path || "" };
-                if (chatThreadId) { try { dbDocuments.upsert(chatThreadId, { id: crypto.randomUUID(), ...artifactDoc }); } catch {} }
-                try { res.write(`event: artifact\ndata: ${JSON.stringify(artifactDoc)}\n\n`); } catch {}
+                const retryContent = String(tc.input.content || "");
+                if (retryContent.trim().length >= 20) {
+                  const artifactDoc = { title: tc.input.title || "Artifact", type: tc.input.type || "html", content: retryContent, language: tc.input.language || "", description: tc.input.description || "", file_path: tc.input.file_path || "" };
+                  if (chatThreadId) { try { dbDocuments.upsert(chatThreadId, { id: crypto.randomUUID(), ...artifactDoc }); } catch {} }
+                  try { res.write(`event: artifact\ndata: ${JSON.stringify(artifactDoc)}\n\n`); } catch {}
+                } else {
+                  console.warn(`[Chat] Retry create_artifact rejected for "${tc.input.title}": content too short (${retryContent.trim().length} chars)`);
+                }
               }
               res.write(`event: tool_result\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, summary: toolResult.summary, sources: toolResult.sources || undefined })}\n\n`);
               res.flush?.();
@@ -1202,26 +1222,31 @@ async function chat(req, res) {
         const toolResult = await executeTool(tc.name, tc.input, res);
 
         if (tc.name === "create_artifact") {
-          hasArtifact = true;
-          const artifactDoc = {
-            title: tc.input.title || "Artifact",
-            type: tc.input.type || "html",
-            content: tc.input.content || "",
-            language: tc.input.language || "",
-            description: tc.input.description || "",
-            file_path: tc.input.file_path || "",
-          };
-          // Persist to SQLite immediately (survives client disconnect)
-          if (chatThreadId) {
+          if (toolResult.error) {
+            // Content rejected (empty/too short) — skip persisting and emitting
+            console.warn(`[Chat] create_artifact rejected for "${tc.input.title}": content too short (${String(tc.input.content || "").trim().length} chars)`);
+          } else {
+            hasArtifact = true;
+            const artifactDoc = {
+              title: tc.input.title || "Artifact",
+              type: tc.input.type || "html",
+              content: tc.input.content || "",
+              language: tc.input.language || "",
+              description: tc.input.description || "",
+              file_path: tc.input.file_path || "",
+            };
+            // Persist to SQLite immediately (survives client disconnect)
+            if (chatThreadId) {
+              try {
+                const docId = crypto.randomUUID();
+                dbDocuments.upsert(chatThreadId, { id: docId, ...artifactDoc });
+              } catch (e) { console.error("[Chat] Failed to persist artifact:", e.message); }
+            }
             try {
-              const docId = crypto.randomUUID();
-              dbDocuments.upsert(chatThreadId, { id: docId, ...artifactDoc });
-            } catch (e) { console.error("[Chat] Failed to persist artifact:", e.message); }
+              res.write(`event: artifact\ndata: ${JSON.stringify(artifactDoc)}\n\n`);
+              res.flush?.();
+            } catch {}
           }
-          try {
-            res.write(`event: artifact\ndata: ${JSON.stringify(artifactDoc)}\n\n`);
-            res.flush?.();
-          } catch {}
         }
 
         // Emit generated files as file-type artifacts for document panel
@@ -1563,6 +1588,14 @@ async function executeTool(name, args, res = null) {
     }
     case "create_artifact": {
       const title = String(args?.title || "Artifact").slice(0, 50);
+      const content = String(args?.content || "");
+      if (content.trim().length < 20) {
+        return {
+          summary: `内容过短，已拒绝写入`,
+          content: `Error: artifact content is empty or too short (${content.trim().length} chars, minimum 20 required). Please provide complete content and call create_artifact again.`,
+          error: true,
+        };
+      }
       return {
         summary: `已创建「${title}」`,
         content: `Artifact "${title}" has been created and is now visible in the user's preview panel.`,
