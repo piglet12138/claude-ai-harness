@@ -749,6 +749,40 @@ img.brand-logo.large {
   font-size: 13px;
 }
 
+.bug-thread-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.bug-thread-id {
+  font-family: monospace;
+  font-size: 11px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  word-break: break-all;
+}
+
+.bug-copy-thread {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.bug-copy-thread:hover {
+  opacity: 1;
+}
+
 .bug-modal-card textarea {
   width: 100%;
   border: 1px solid var(--line);

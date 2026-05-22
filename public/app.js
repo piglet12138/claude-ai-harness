@@ -357,6 +357,7 @@ function showLoginForm() {
 function showBugReportModal() {
   document.querySelector(".bug-modal")?.remove();
   const bugImages = []; // base64 strings
+  const threadId = state.activeId || null;
   const modal = document.createElement("div");
   modal.className = "bug-modal";
   modal.innerHTML = `
@@ -364,6 +365,7 @@ function showBugReportModal() {
     <div class="bug-modal-card">
       <h3>反馈问题</h3>
       <p>描述你遇到的问题或建议：</p>
+      ${threadId ? `<div class="bug-thread-row">当前对话 ID：<code class="bug-thread-id">${threadId}</code><button class="bug-copy-thread" title="复制对话 ID">📋</button></div>` : ''}
       <textarea id="bugText" rows="5" placeholder="比如：上传图片后无法识别内容...&#10;&#10;可以直接粘贴截图 (Ctrl+V)"></textarea>
       <div class="bug-images"></div>
       <div class="bug-upload-row">
@@ -380,6 +382,16 @@ function showBugReportModal() {
       <div class="bug-msg"></div>
     </div>`;
   document.body.append(modal);
+
+  if (threadId) {
+    modal.querySelector(".bug-copy-thread").addEventListener("click", () => {
+      navigator.clipboard.writeText(threadId).then(() => {
+        const btn = modal.querySelector(".bug-copy-thread");
+        btn.textContent = "✓";
+        setTimeout(() => { btn.textContent = "📋"; }, 1500);
+      }).catch(() => {});
+    });
+  }
 
   const imagesDiv = modal.querySelector(".bug-images");
   const textarea = modal.querySelector("#bugText");
@@ -453,7 +465,7 @@ function showBugReportModal() {
     modal.querySelector(".bug-submit").disabled = true;
     modal.querySelector(".bug-submit").textContent = "提交中...";
     try {
-      const resp = await fetch("/api/bug-report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, images: bugImages }) });
+      const resp = await fetch("/api/bug-report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, images: bugImages, ...(threadId ? { threadId } : {}) }) });
       if (!resp.ok) throw new Error((await resp.json()).error || "提交失败");
       msg.textContent = "感谢反馈！";
       msg.style.color = "#4d9950";
