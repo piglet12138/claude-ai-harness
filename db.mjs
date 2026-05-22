@@ -135,6 +135,12 @@ db.exec(`
     summary TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now', '+8 hours'))
   );
+
+  CREATE TABLE IF NOT EXISTS user_memory (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    content TEXT NOT NULL DEFAULT '',
+    updated_at TEXT DEFAULT (datetime('now', '+8 hours'))
+  );
 `);
 
 // Migrations for existing databases
@@ -219,6 +225,10 @@ const stmts = {
   // Tool result summary cache
   getToolResultSummary: db.prepare("SELECT summary FROM tool_result_summary WHERE content_hash = ?"),
   insertToolResultSummary: db.prepare("INSERT OR REPLACE INTO tool_result_summary (content_hash, summary) VALUES (?, ?)"),
+
+  // User memory
+  getMemory: db.prepare("SELECT content FROM user_memory WHERE user_id = ?"),
+  upsertMemory: db.prepare("INSERT INTO user_memory (user_id, content, updated_at) VALUES (?, ?, datetime('now', '+8 hours')) ON CONFLICT(user_id) DO UPDATE SET content=excluded.content, updated_at=datetime('now', '+8 hours')"),
 
   // Ratings
   upsertRating: db.prepare(`INSERT INTO ratings (message_id, thread_id, user_id, rating) VALUES (?, ?, ?, ?)
@@ -364,6 +374,18 @@ export const dbRatings = {
   getThreadRatings(threadId) { return stmts.getThreadRatings.all(threadId); },
   all() { return stmts.allRatings.all(); },
   stats() { return stmts.ratingStats.get(); },
+};
+
+export const dbMemory = {
+  get(userId) { return stmts.getMemory.get(userId)?.content || ""; },
+  append(userId, line) {
+    const current = this.get(userId);
+    const newContent = current ? current + "\n" + String(line || "").trim() : String(line || "").trim();
+    stmts.upsertMemory.run(userId, newContent.slice(0, 4000));
+  },
+  replace(userId, content) {
+    stmts.upsertMemory.run(userId, String(content || "").slice(0, 4000));
+  },
 };
 
 // Bulk import (for migration from localStorage)

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
-import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage, dbRatings, dbPv, dbTelemetry, dbToolResultSummary } from "./db.mjs";
+import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage, dbRatings, dbPv, dbTelemetry, dbToolResultSummary, dbMemory } from "./db.mjs";
 const XLSX = require("xlsx");
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TableRow, TableCell, Table, WidthType, BorderStyle, PageBreak } = require("docx");
 
@@ -284,9 +284,13 @@ const agenticSystemPromptText = [
   "- 不确定格式时，优先用 create_artifact 生成 HTML 文档（可在线预览）",
   "- run_code 生成了 .docx/.xlsx/.pptx/.pdf 文件后，**禁止**再用 create_artifact 生成 HTML 预览",
 ].join("\n");
-const agenticSystemPrompt = [
-  { type: "text", text: agenticSystemPromptText, cache_control: { type: "ephemeral" } },
-];
+function buildSystemPrompt(memory) {
+  const memoryText = `\n\n## 长期记忆\n你有一个跨对话的长期记忆系统。\n当前用户 memory：\n${memory || "（暂无）"}\n\n何时主动 append：用户告诉你他的身份、职业、正在做的项目、长期偏好时。\n何时主动 read：当前对话开始或需要回顾用户背景时。\n何时 replace：memory 超过 30 行或内容明显冗余时整理。\n不要把对话内一次性信息记进 memory。`;
+  return [
+    { type: "text", text: agenticSystemPromptText, cache_control: { type: "ephemeral" } },
+    { type: "text", text: memoryText },
+  ];
+}
 
 const anthropicTools = [
   {
@@ -359,6 +363,18 @@ const anthropicTools = [
       type: "object",
       properties: {},
       required: [],
+    },
+  },
+  {
+    name: "manage_memory",
+    description: "管理跨对话的长期记忆。在主对话中发现值得长期记住的事实/偏好时调用。包括：用户的身份、职业、所在城市、长期兴趣、技术栈偏好、当前正在做的项目、明确表达过的偏好（如「请用中文」「不要用 emoji」）。**不要记录**：一次性问题、对话内的临时上下文、敏感信息（密码、身份证号）。",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["read", "append", "replace"], description: "read 读取当前 memory；append 追加一行；replace 全量替换（用于整理压缩）" },
+        content: { type: "string", description: "append 时是要追加的内容（一行）；replace 时是新的完整 memory；read 时忽略" },
+      },
+      required: ["action"],
     },
   },
   {
@@ -727,6 +743,21 @@ const server = http.createServer(async (req, res) => {
         null,
         `<div style="font-family:sans-serif;max-width:640px"><p style="color:#666">From: ${session.email}</p>${threadHtml}<p style="white-space:pre-wrap;line-height:1.6">${text.replace(/</g,"&lt;")}</p>${imgsHtml}<hr style="border:none;border-top:1px solid #eee;margin:20px 0"><p style="font-size:12px;color:#999"><a href="${siteUrl}/admin">管理后台</a></p></div>`
       ).catch(() => {});
+      return json(res, { ok: true });
+    }
+
+    // Long-term memory — read/replace user's memory
+    if (req.method === "GET" && url.pathname === "/api/memory") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      return json(res, { content: dbMemory.get(session.userId) });
+    }
+
+    if (req.method === "PUT" && url.pathname === "/api/memory") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const body = await readJson(req, 32 * 1024);
+      dbMemory.replace(session.userId, String(body?.content || ""));
       return json(res, { ok: true });
     }
 
@@ -1107,9 +1138,13 @@ async function uploadGoogleDoc(res, body) {
 }
 
 async function chat(req, res) {
+  const session = readSession(req);
   const body = await readJson(req, 50 * 1024 * 1024);
   const messages = Array.isArray(body?.messages) ? body.messages.slice(-100) : [];
   const chatThreadId = body?.threadId || null; // for persisting artifacts to SQLite
+  // Build per-user system prompt with long-term memory
+  const userMemory = session ? dbMemory.get(session.userId) : "";
+  const systemPrompt = buildSystemPrompt(userMemory);
   // Preprocess: extract text from binary file attachments (PDF, XLSX)
   for (const msg of messages) {
     if (!Array.isArray(msg.content)) continue;
@@ -1196,7 +1231,7 @@ async function chat(req, res) {
       max_tokens: 32768,
       stream: true,
       temperature,
-      system: agenticSystemPrompt,
+      system: systemPrompt,
       messages: apiMessages,
       ...(!isLastRound && roundTools.length ? { tools: roundTools } : {}),
     };
@@ -1222,7 +1257,7 @@ async function chat(req, res) {
         const compressedMessages = round === 0 ? apiMessages : compressMessages(apiMessages);
         const retryBody = {
           model, max_tokens: 32768, stream: true, temperature,
-          system: agenticSystemPrompt,
+          system: systemPrompt,
           messages: compressedMessages,
           tools: tools.length ? tools : undefined,
         };
@@ -1239,7 +1274,7 @@ async function chat(req, res) {
               res.write(`event: tool_start\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, args: toolDisplayArgs(tc.name, tc.input) })}\n\n`);
               console.log(`[Chat] Executing tool: ${tc.name}`);
               collectedToolCalls.push(tc.name);
-        const toolResult = await executeTool(tc.name, tc.input, res, chatThreadId);
+        const toolResult = await executeTool(tc.name, tc.input, res, chatThreadId, session?.userId || null);
               if (tc.name === "create_artifact") {
                 const retryContent = String(tc.input.content || "");
                 if (retryContent.trim().length >= 20) {
@@ -1296,7 +1331,7 @@ async function chat(req, res) {
         res.write(`event: tool_start\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, args: toolDisplayArgs(tc.name, tc.input) })}\n\n`);
         res.flush?.();
 
-        const toolResult = await executeTool(tc.name, tc.input, res, chatThreadId);
+        const toolResult = await executeTool(tc.name, tc.input, res, chatThreadId, session?.userId || null);
 
         if (tc.name === "create_artifact") {
           if (toolResult.error) {
@@ -1425,7 +1460,6 @@ async function chat(req, res) {
     } catch {}
   }
   // Record usage + telemetry
-  const session = readSession(req);
   const latencyMs = Date.now() - chatStartTime;
   if (totalInputTokens || totalOutputTokens) {
     if (session) {
@@ -1601,7 +1635,7 @@ async function consumeAnthropicStream(body, res) {
 // ---------------------------------------------------------------------------
 // Tool execution dispatcher
 // ---------------------------------------------------------------------------
-async function executeTool(name, args, res = null, threadId = null) {
+async function executeTool(name, args, res = null, threadId = null, userId = null) {
   switch (name) {
     case "web_search": {
       const query = String(args?.query || "").trim();
@@ -1710,6 +1744,26 @@ async function executeTool(name, args, res = null, threadId = null) {
       const doc = dbDocuments.get(artId);
       if (!doc) return { summary: "未找到", content: `Artifact with ID "${artId}" not found.` };
       return { summary: `「${doc.title}」`, content: `标题: ${doc.title}\n类型: ${doc.type}\n更新时间: ${doc.updated_at}\n\n${doc.content}` };
+    }
+    case "manage_memory": {
+      const action = String(args?.action || "read");
+      if (!userId) return { summary: "无法操作记忆", content: "No user session available." };
+      if (action === "read") {
+        const mem = dbMemory.get(userId);
+        return { summary: "已读取记忆", content: mem || "（暂无记忆）" };
+      }
+      if (action === "append") {
+        const line = String(args?.content || "").trim();
+        if (!line) return { summary: "内容为空", content: "No content to append." };
+        dbMemory.append(userId, line);
+        return { summary: "已追加到记忆", content: `已追加：${line}` };
+      }
+      if (action === "replace") {
+        const content = String(args?.content || "");
+        dbMemory.replace(userId, content);
+        return { summary: "记忆已更新", content: `记忆已全量替换，长度：${content.length} 字符` };
+      }
+      return { summary: "未知操作", content: `Unknown action: ${action}` };
     }
     default:
       return { summary: "未知工具", content: `Unknown tool: ${name}` };
@@ -1921,6 +1975,7 @@ function toolDisplayArgs(name, args) {
   if (name === "create_artifact") return { title: args?.title, type: args?.type };
   if (name === "list_artifacts") return {};
   if (name === "get_artifact") return { id: args?.id };
+  if (name === "manage_memory") return { action: args?.action, content: String(args?.content || "").slice(0, 60) };
   return {};
 }
 
