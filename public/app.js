@@ -1216,6 +1216,10 @@ function parseInteractive(text) {
     } catch {}
   }
 
+  // Strip partial/incomplete interactive blocks that appear mid-stream (no closing tag yet)
+  clean = clean.replace(/<<options>>[\s\S]*$/, "").trimEnd();
+  clean = clean.replace(/<<suggestions>>[\s\S]*$/, "").trimEnd();
+
   return { clean, suggestions, options };
 }
 
@@ -1640,6 +1644,8 @@ function renderToolCard(tc) {
 
   // Long doc progress log with progress bar
   if (tc.name === "generate_long_document") {
+    // Store progress length so updateStreamingMessage can detect changes
+    card.dataset.progressLen = String(tc._progressLog?.length || 0);
     const progressDiv = document.createElement("div");
     progressDiv.className = "longdoc-progress";
 
@@ -1814,12 +1820,19 @@ function updateStreamingMessage(assistant) {
       toolsDiv.className = "tool-calls";
       body.prepend(toolsDiv);
     }
-    // Only re-render tool cards if count changed or status changed
+    // Only re-render tool cards if count, status, or progress log changed
     const existingCount = toolsDiv.children.length;
     const needsUpdate = existingCount !== assistant.toolCalls.length ||
       assistant.toolCalls.some((tc, i) => {
         const card = toolsDiv.children[i];
-        return card && !card.classList.contains(tc.status || "running");
+        if (!card) return true;
+        if (!card.classList.contains(tc.status || "running")) return true;
+        // Re-render generate_long_document cards when progress log grows
+        if (tc.name === "generate_long_document") {
+          const savedLen = parseInt(card.dataset.progressLen || "0", 10);
+          if ((tc._progressLog?.length || 0) !== savedLen) return true;
+        }
+        return false;
       });
     if (needsUpdate) {
       toolsDiv.innerHTML = "";
@@ -1831,7 +1844,9 @@ function updateStreamingMessage(assistant) {
 
   // Update text bubble
   let bubble = body.querySelector(".message-bubble.streaming");
-  const content = displayAssistantMessage(assistant.content);
+  // Strip <<options>>/<</options>> blocks from streaming display so raw markers don't flash
+  const { clean: streamClean } = parseInteractive(displayAssistantMessage(assistant.content));
+  const content = streamClean;
   if (content.trim()) {
     // Remove waiting indicator if present
     body.querySelector(".stream-waiting")?.remove();
