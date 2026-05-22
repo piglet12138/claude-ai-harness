@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
-import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage, dbRatings, dbPv, dbTelemetry } from "./db.mjs";
+import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage, dbRatings, dbPv, dbTelemetry, dbToolResultSummary } from "./db.mjs";
 const XLSX = require("xlsx");
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TableRow, TableCell, Table, WidthType, BorderStyle, PageBreak } = require("docx");
 
@@ -375,6 +375,9 @@ const anthropicTools = [
   },
 ];
 const apiEndpoint = `${baseUrl.replace(/\/v1\/?$/, "")}/v1/messages`;
+const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+const PROACTIVE_TOKEN_BUDGET = 60000; // leave room for 32K output
+const IN_LOOP_TOKEN_BUDGET = 80000;   // looser budget for mid-loop compress
 
 // ---------------------------------------------------------------------------
 // API Key Pool — round-robin with temporary cooldown on failure
@@ -1104,7 +1107,7 @@ async function uploadGoogleDoc(res, body) {
 
 async function chat(req, res) {
   const body = await readJson(req, 50 * 1024 * 1024);
-  const messages = Array.isArray(body?.messages) ? body.messages.slice(-24) : [];
+  const messages = Array.isArray(body?.messages) ? takeByBudget(body.messages, PROACTIVE_TOKEN_BUDGET * 0.8) : [];
   const chatThreadId = body?.threadId || null; // for persisting artifacts to SQLite
   // Preprocess: extract text from binary file attachments (PDF, XLSX)
   for (const msg of messages) {
@@ -1124,6 +1127,22 @@ async function chat(req, res) {
 
   // Convert frontend messages to Anthropic format
   let apiMessages = toAnthropicMessages(messages);
+
+  // Haiku summarization stats (tracked across this request)
+  const haikuStats = { calls: 0, inputTokens: 0, outputTokens: 0 };
+  let compressFromTokens = 0, compressToTokens = 0;
+
+  // Proactive compress before first API call (avoids waiting for 400)
+  {
+    const preTokens = estimateTokens(apiMessages);
+    if (preTokens > PROACTIVE_TOKEN_BUDGET) {
+      compressFromTokens = preTokens;
+      const result = await proactiveCompress(apiMessages, PROACTIVE_TOKEN_BUDGET, haikuStats);
+      apiMessages = result.messages;
+      compressToTokens = result.toTokens;
+      console.log(`[Chat] Proactive compress: ${compressFromTokens} -> ${compressToTokens} tokens (${haikuStats.calls} Haiku calls)`);
+    }
+  }
 
   // Build available tools
   const tools = anthropicTools.filter((t) => {
@@ -1146,7 +1165,7 @@ async function chat(req, res) {
   const chatStartTime = Date.now();
   const collectedToolCalls = [];
 
-  const TOKEN_BUDGET = 80000; // Conservative budget to leave room for response
+  const TOKEN_BUDGET = IN_LOOP_TOKEN_BUDGET;
   let totalInputTokens = 0, totalOutputTokens = 0, totalCacheCreationTokens = 0, totalCacheReadTokens = 0;
   let totalRounds = 0;
 
@@ -1414,7 +1433,7 @@ async function chat(req, res) {
   try {
     const lastUserMsg = messages.findLast(m => m.role === "user");
     const preview = typeof lastUserMsg?.content === "string" ? lastUserMsg.content.slice(0, 2000) : "";
-    dbTelemetry.record(session?.userId || "", chatThreadId || "", collectedToolCalls, totalInputTokens, totalOutputTokens, latencyMs, preview, model, totalRounds, totalCacheCreationTokens, totalCacheReadTokens);
+    dbTelemetry.record(session?.userId || "", chatThreadId || "", collectedToolCalls, totalInputTokens, totalOutputTokens, latencyMs, preview, model, totalRounds, totalCacheCreationTokens, totalCacheReadTokens, compressFromTokens, compressToTokens, haikuStats.calls, haikuStats.inputTokens, haikuStats.outputTokens);
   } catch (e) { console.error("[Telemetry] Failed to record:", e.message); }
   try {
     res.write("event: done\ndata: {}\n\n");
@@ -1774,6 +1793,100 @@ function compressMessages(messages) {
   }
 
   return compressed;
+}
+
+// Select messages from tail until token budget is exhausted (replaces hard slice(-24))
+function takeByBudget(messages, budget) {
+  if (!messages?.length) return [];
+  const result = [];
+  let usedTokens = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    const content = msg.content || "";
+    const text = typeof content === "string" ? content
+      : Array.isArray(content) ? content.map(p => typeof p === "string" ? p : (p.text || p.content || "")).join("")
+      : "";
+    const tokens = Math.ceil(text.length / 3.5);
+    if (usedTokens + tokens > budget && result.length > 0) break;
+    result.unshift(msg);
+    usedTokens += tokens;
+  }
+  return result;
+}
+
+// Haiku call for internal summarization tasks (uses shared key pool)
+async function callHaiku(prompt, maxTokens = 512) {
+  const key = pickKey();
+  const response = await fetch(apiEndpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2024-10-22",
+      "anthropic-beta": "prompt-caching-2024-07-31",
+    },
+    body: JSON.stringify({
+      model: HAIKU_MODEL,
+      max_tokens: maxTokens,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.text().catch(() => "");
+    throw new Error(`Haiku API ${response.status}: ${err.slice(0, 100)}`);
+  }
+  const data = await response.json();
+  const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+  return { text, inputTokens: data.usage?.input_tokens || 0, outputTokens: data.usage?.output_tokens || 0 };
+}
+
+// Summarize a tool_result with Haiku, caching by content hash to avoid redundant calls
+async function summarizeWithHaiku(content, haikuStats) {
+  const hash = crypto.createHash("sha256").update(content).digest("hex");
+  const cached = dbToolResultSummary.get(hash);
+  if (cached) return cached;
+
+  const prompt = `以下是一段工具调用结果，请用1-2句中文简洁总结其核心信息，保留关键数据和结论：\n\n${content.slice(0, 8000)}`;
+  const { text, inputTokens, outputTokens } = await callHaiku(prompt);
+
+  dbToolResultSummary.set(hash, text);
+  haikuStats.calls++;
+  haikuStats.inputTokens += inputTokens;
+  haikuStats.outputTokens += outputTokens;
+
+  return text;
+}
+
+// Proactive context compression: L1 Haiku summarize → L2 budgetCompress fallback
+async function proactiveCompress(messages, budget, haikuStats) {
+  const fromTokens = estimateTokens(messages);
+  if (fromTokens <= budget) return { messages, fromTokens, toTokens: fromTokens };
+
+  const compressed = JSON.parse(JSON.stringify(messages));
+
+  // L1: Summarize large tool_results with Haiku (skip last 2 messages)
+  const TOOL_RESULT_THRESHOLD = 3000;
+  for (let i = 0; i < compressed.length - 2; i++) {
+    const msg = compressed[i];
+    if (msg.role !== "user" || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block.type === "tool_result" && typeof block.content === "string" && block.content.length > TOOL_RESULT_THRESHOLD) {
+        try {
+          block.content = await summarizeWithHaiku(block.content, haikuStats);
+        } catch (e) {
+          console.warn("[Compress] Haiku summarize failed, truncating:", e.message);
+          block.content = block.content.slice(0, TOOL_RESULT_THRESHOLD) + "\n...(已截断)";
+        }
+      }
+    }
+  }
+
+  const afterL1 = estimateTokens(compressed);
+  if (afterL1 <= budget) return { messages: compressed, fromTokens, toTokens: afterL1 };
+
+  // L2+: Fall back to existing budget compress (truncation + structural flatten)
+  const final = budgetCompress(compressed, budget);
+  return { messages: final, fromTokens, toTokens: estimateTokens(final) };
 }
 
 function safeParseJson(str) {
