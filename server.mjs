@@ -111,7 +111,7 @@ process.on("unhandledRejection", (reason) => {
   console.error("[FATAL] Unhandled rejection:", String(reason));
 });
 
-const agenticSystemPrompt = [
+const agenticSystemPromptText = [
   "你是一个极其聪明、有深度的 AI 助手。默认用中文。不做身份声明。",
   "回答风格：深度优先，充分展开，结构清晰，不用空洞收尾语。",
   "",
@@ -284,6 +284,9 @@ const agenticSystemPrompt = [
   "- 不确定格式时，优先用 create_artifact 生成 HTML 文档（可在线预览）",
   "- run_code 生成了 .docx/.xlsx/.pptx/.pdf 文件后，**禁止**再用 create_artifact 生成 HTML 预览",
 ].join("\n");
+const agenticSystemPrompt = [
+  { type: "text", text: agenticSystemPromptText, cache_control: { type: "ephemeral" } },
+];
 
 const anthropicTools = [
   {
@@ -368,6 +371,7 @@ const anthropicTools = [
       },
       required: ["id"],
     },
+    cache_control: { type: "ephemeral" },
   },
 ];
 const apiEndpoint = `${baseUrl.replace(/\/v1\/?$/, "")}/v1/messages`;
@@ -1143,7 +1147,7 @@ async function chat(req, res) {
   const collectedToolCalls = [];
 
   const TOKEN_BUDGET = 80000; // Conservative budget to leave room for response
-  let totalInputTokens = 0, totalOutputTokens = 0;
+  let totalInputTokens = 0, totalOutputTokens = 0, totalCacheCreationTokens = 0, totalCacheReadTokens = 0;
   let totalRounds = 0;
 
   try {
@@ -1179,6 +1183,7 @@ async function chat(req, res) {
         "content-type": "application/json",
         "x-api-key": apiKey,
         "anthropic-version": "2024-10-22",
+        "anthropic-beta": "prompt-caching-2024-07-31",
       },
       body: JSON.stringify(upstreamBody),
     });
@@ -1198,7 +1203,7 @@ async function chat(req, res) {
         };
         const retry = await fetch(apiEndpoint, {
           method: "POST",
-          headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2024-10-22" },
+          headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2024-10-22", "anthropic-beta": "prompt-caching-2024-07-31" },
           body: JSON.stringify(retryBody),
         });
         if (retry.ok && retry.body) {
@@ -1239,7 +1244,9 @@ async function chat(req, res) {
     }
     totalInputTokens += result.inputTokens || 0;
     totalOutputTokens += result.outputTokens || 0;
-    console.log(`[Chat] Round ${round}: stream consumed, stopReason=${result.stopReason}, toolUse=${result.toolUseBlocks?.length || 0}, tokens: +${result.inputTokens}/${result.outputTokens}`);
+    totalCacheCreationTokens += result.cacheCreationTokens || 0;
+    totalCacheReadTokens += result.cacheReadTokens || 0;
+    console.log(`[Chat] Round ${round}: stream consumed, stopReason=${result.stopReason}, toolUse=${result.toolUseBlocks?.length || 0}, tokens: +${result.inputTokens}/${result.outputTokens}, cache: creation=${result.cacheCreationTokens || 0} read=${result.cacheReadTokens || 0}`);
 
     if (result.stopReason === "tool_use" && result.toolUseBlocks.length) {
       const allSearches = result.toolUseBlocks.every((t) => t.name === "web_search");
@@ -1407,7 +1414,7 @@ async function chat(req, res) {
   try {
     const lastUserMsg = messages.findLast(m => m.role === "user");
     const preview = typeof lastUserMsg?.content === "string" ? lastUserMsg.content.slice(0, 2000) : "";
-    dbTelemetry.record(session?.userId || "", chatThreadId || "", collectedToolCalls, totalInputTokens, totalOutputTokens, latencyMs, preview, model, totalRounds);
+    dbTelemetry.record(session?.userId || "", chatThreadId || "", collectedToolCalls, totalInputTokens, totalOutputTokens, latencyMs, preview, model, totalRounds, totalCacheCreationTokens, totalCacheReadTokens);
   } catch (e) { console.error("[Telemetry] Failed to record:", e.message); }
   try {
     res.write("event: done\ndata: {}\n\n");
@@ -1475,7 +1482,7 @@ async function consumeAnthropicStream(body, res) {
   const allBlocks = [];     // complete content blocks for context
   let currentBlock = null;
   let stopReason = "";
-  let inputTokens = 0, outputTokens = 0;
+  let inputTokens = 0, outputTokens = 0, cacheCreationTokens = 0, cacheReadTokens = 0;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -1529,7 +1536,11 @@ async function consumeAnthropicStream(body, res) {
             break;
 
           case "message_start":
-            if (data.message?.usage) inputTokens += data.message.usage.input_tokens || 0;
+            if (data.message?.usage) {
+              inputTokens += data.message.usage.input_tokens || 0;
+              cacheCreationTokens += data.message.usage.cache_creation_input_tokens || 0;
+              cacheReadTokens += data.message.usage.cache_read_input_tokens || 0;
+            }
             break;
 
           case "message_delta":
@@ -1557,6 +1568,8 @@ async function consumeAnthropicStream(body, res) {
     stopReason,
     inputTokens,
     outputTokens,
+    cacheCreationTokens,
+    cacheReadTokens,
   };
 }
 

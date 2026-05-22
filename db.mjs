@@ -113,6 +113,8 @@ db.exec(`
     message_preview TEXT DEFAULT '',
     model TEXT DEFAULT '',
     rounds INTEGER DEFAULT 1,
+    cache_creation_tokens INTEGER DEFAULT 0,
+    cache_read_tokens INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now', '+8 hours'))
   );
   CREATE INDEX IF NOT EXISTS idx_telemetry_user ON telemetry(user_id, created_at);
@@ -128,6 +130,10 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_ratings_thread ON ratings(thread_id);
 `);
+
+// Migrations for existing databases
+try { db.exec("ALTER TABLE telemetry ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE telemetry ADD COLUMN cache_read_tokens INTEGER DEFAULT 0"); } catch {}
 
 // ---------------------------------------------------------------------------
 // Prepared statements
@@ -191,7 +197,7 @@ const stmts = {
   insertPv: db.prepare("INSERT INTO pv (path, referrer, screen, fp) VALUES (?, ?, ?, ?)"),
 
   // Telemetry
-  insertTelemetry: db.prepare("INSERT INTO telemetry (user_id, thread_id, tool_calls, input_tokens, output_tokens, latency_ms, message_preview, model, rounds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+  insertTelemetry: db.prepare("INSERT INTO telemetry (user_id, thread_id, tool_calls, input_tokens, output_tokens, latency_ms, message_preview, model, rounds, cache_creation_tokens, cache_read_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
   allTelemetry: db.prepare("SELECT t.*, u.email FROM telemetry t LEFT JOIN users u ON t.user_id = u.id ORDER BY t.created_at DESC"),
   telemetryStats: db.prepare(`SELECT COUNT(*) as total_chats,
     SUM(input_tokens) as total_input, SUM(output_tokens) as total_output,
@@ -325,8 +331,8 @@ export const dbPv = {
 };
 
 export const dbTelemetry = {
-  record(userId, threadId, toolCalls, inputTokens, outputTokens, latencyMs, messagePreview, model, rounds) {
-    stmts.insertTelemetry.run(userId, threadId, JSON.stringify(toolCalls), inputTokens, outputTokens, latencyMs, messagePreview, model, rounds);
+  record(userId, threadId, toolCalls, inputTokens, outputTokens, latencyMs, messagePreview, model, rounds, cacheCreationTokens = 0, cacheReadTokens = 0) {
+    stmts.insertTelemetry.run(userId, threadId, JSON.stringify(toolCalls), inputTokens, outputTokens, latencyMs, messagePreview, model, rounds, cacheCreationTokens, cacheReadTokens);
   },
   all() { return stmts.allTelemetry.all().map(r => ({ ...r, tool_calls: JSON.parse(r.tool_calls || '[]') })); },
   stats() { return stmts.telemetryStats.get(); },
