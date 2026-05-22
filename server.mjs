@@ -156,6 +156,18 @@ const agenticSystemPrompt = [
   "- 普通博客、短文档、代码文件、网页 → 用 create_artifact",
   "- **绝对不要**用 create_artifact 来生成需要 20 页以上的内容，它无法生成那么长的文档",
   "",
+  "## 白皮书 / 长文档生成：先问后做（严格遵守）",
+  "",
+  "当用户要求「白皮书」「完整报告」「详细文档」「全面分析」「论文」等长文档时：",
+  "1. **先用 <<options>> 收集偏好**（目标受众、篇幅偏好、语气风格、重点方向等，3-5 个问题）",
+  "2. <<options>> 必须是该轮消息的最后内容，**不要在同一消息里调用任何工具**",
+  "3. 等用户提交选项后，将选择合并到 requirements 参数，再调用 generate_long_document",
+  "4. generate_long_document 完成后**直接结束**，不要再输出 <<options>> 或 <<suggestions>>",
+  "",
+  "**docx 格式白皮书/报告**：用 generate_long_document，生成可在线预览的 Markdown；",
+  "用户点右侧面板「下载 DOCX」即得 Word 文件。**禁止**再用 run_code 生成同内容的 .docx；",
+  "**禁止**再用 create_artifact 生成 HTML 预览版（生成一次，预览一次，不重复）。",
+  "",
   "## create_artifact 规则（仅在用户明确要求时执行）",
   "1. 聊天中只用 1-2 句话说明意图",
   "2. 调用 create_artifact 生成完整内容（文档至少2000字，HTML要美观完整，代码要可运行）",
@@ -255,11 +267,13 @@ const agenticSystemPrompt = [
   "要点：不要用 unicode 上下标（会变黑块），用 <sub>/<super> 标签。",
   "",
   "### 选择指南",
-  "- 用户说「Word文档」「docx」→ 用 docx (JS)",
+  "- 用户说「Word文档」「docx」（简短独立文件，非报告/白皮书）→ 用 docx (JS) via run_code",
+  "- 用户说「docx白皮书」「Word格式报告」「下载Word版」→ 用 generate_long_document（内置预览，点「下载DOCX」获取Word）",
   "- 用户说「Excel」「表格文件」「xlsx」→ 用 openpyxl (Python)",
   "- 用户说「PPT」「幻灯片」「演示文稿」「pptx」→ 用 pptxgenjs (JS)",
   "- 用户说「PDF」→ 用 reportlab (Python)",
   "- 不确定格式时，优先用 create_artifact 生成 HTML 文档（可在线预览）",
+  "- run_code 生成了 .docx/.xlsx/.pptx/.pdf 文件后，**禁止**再用 create_artifact 生成 HTML 预览",
 ].join("\n");
 
 const anthropicTools = [
@@ -1215,6 +1229,7 @@ async function chat(req, res) {
       // Execute tools and build tool_result blocks
       const toolResultBlocks = [];
       let hasArtifact = false;
+      let docGenerated = false; // set when generate_long_document or run_code doc files complete
       for (const tc of result.toolUseBlocks) {
         collectedToolCalls.push(tc.name);
         res.write(`event: tool_start\ndata: ${JSON.stringify({ id: tc.id, name: tc.name, args: toolDisplayArgs(tc.name, tc.input) })}\n\n`);
@@ -1250,6 +1265,11 @@ async function chat(req, res) {
           }
         }
 
+        // generate_long_document emits its own artifact event inside executeTool; mark done
+        if (tc.name === "generate_long_document") {
+          docGenerated = true;
+        }
+
         // Emit generated files as file-type artifacts for document panel
         if (tc.name === "run_code" && toolResult.codeResult?.files?.length) {
           for (const f of toolResult.codeResult.files) {
@@ -1268,6 +1288,10 @@ async function chat(req, res) {
               try { dbDocuments.upsert(chatThreadId, { id: crypto.randomUUID(), ...artifactDoc }); } catch {}
             }
             try { res.write(`event: artifact\ndata: ${JSON.stringify(artifactDoc)}\n\n`); res.flush?.(); } catch {}
+          }
+          // If run_code produced downloadable doc files, mark done so AI won't re-generate HTML
+          if (toolResult.codeResult.files.some(f => /\.(docx|xlsx|pptx|pdf)$/i.test(f.name))) {
+            docGenerated = true;
           }
         }
 
@@ -1288,6 +1312,10 @@ async function chat(req, res) {
           content: resultContent,
         });
       }
+
+      // Document/file generation complete — break the loop so the AI doesn't
+      // generate a follow-up turn with options or a redundant HTML preview.
+      if (docGenerated) break;
 
       // Compact approach: avoid carrying huge content into next round
       if (hasArtifact) {
