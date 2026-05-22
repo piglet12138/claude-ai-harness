@@ -376,7 +376,8 @@ const anthropicTools = [
 ];
 const apiEndpoint = `${baseUrl.replace(/\/v1\/?$/, "")}/v1/messages`;
 const HAIKU_MODEL = "claude-haiku-4-5-20251001";
-const PROACTIVE_TOKEN_BUDGET = 60000; // leave room for 32K output
+const PROACTIVE_TOKEN_BUDGET = 30000; // trigger Haiku summarization early
+const HARD_CAP = 100000;              // hard truncation fallback after compression
 const IN_LOOP_TOKEN_BUDGET = 80000;   // looser budget for mid-loop compress
 
 // ---------------------------------------------------------------------------
@@ -1107,7 +1108,7 @@ async function uploadGoogleDoc(res, body) {
 
 async function chat(req, res) {
   const body = await readJson(req, 50 * 1024 * 1024);
-  const messages = Array.isArray(body?.messages) ? takeByBudget(body.messages, PROACTIVE_TOKEN_BUDGET * 0.8) : [];
+  const messages = Array.isArray(body?.messages) ? body.messages.slice(-100) : [];
   const chatThreadId = body?.threadId || null; // for persisting artifacts to SQLite
   // Preprocess: extract text from binary file attachments (PDF, XLSX)
   for (const msg of messages) {
@@ -1141,6 +1142,11 @@ async function chat(req, res) {
       apiMessages = result.messages;
       compressToTokens = result.toTokens;
       console.log(`[Chat] Proactive compress: ${compressFromTokens} -> ${compressToTokens} tokens (${haikuStats.calls} Haiku calls)`);
+    }
+    // Hard cap fallback: if still over HARD_CAP after compression, truncate from tail
+    if (estimateTokens(apiMessages) > HARD_CAP) {
+      apiMessages = takeByBudget(apiMessages, HARD_CAP);
+      console.log(`[Chat] Hard cap applied: truncated to ~${HARD_CAP} tokens`);
     }
   }
 
@@ -1863,30 +1869,40 @@ async function proactiveCompress(messages, budget, haikuStats) {
   if (fromTokens <= budget) return { messages, fromTokens, toTokens: fromTokens };
 
   const compressed = JSON.parse(JSON.stringify(messages));
+  const haikuCallsBefore = haikuStats.calls;
 
   // L1: Summarize large tool_results with Haiku (skip last 2 messages)
   const TOOL_RESULT_THRESHOLD = 3000;
+  let l1Count = 0;
   for (let i = 0; i < compressed.length - 2; i++) {
     const msg = compressed[i];
     if (msg.role !== "user" || !Array.isArray(msg.content)) continue;
     for (const block of msg.content) {
       if (block.type === "tool_result" && typeof block.content === "string" && block.content.length > TOOL_RESULT_THRESHOLD) {
+        const origLen = block.content.length;
         try {
           block.content = await summarizeWithHaiku(block.content, haikuStats);
+          l1Count++;
         } catch (e) {
           console.warn("[Compress] Haiku summarize failed, truncating:", e.message);
           block.content = block.content.slice(0, TOOL_RESULT_THRESHOLD) + "\n...(已截断)";
         }
+        console.log(`[Compress L1] tool_result[${i}] ${origLen}chars -> ${block.content.length}chars`);
       }
     }
   }
 
   const afterL1 = estimateTokens(compressed);
+  const haikuCallsL1 = haikuStats.calls - haikuCallsBefore;
+  console.log(`[Compress L1] ${l1Count} tool_results processed, ${haikuCallsL1} Haiku calls, ${fromTokens} -> ${afterL1} tokens`);
   if (afterL1 <= budget) return { messages: compressed, fromTokens, toTokens: afterL1 };
 
   // L2+: Fall back to existing budget compress (truncation + structural flatten)
+  console.log(`[Compress L2] ${afterL1} tokens still > budget ${budget}, falling back to budgetCompress`);
   const final = budgetCompress(compressed, budget);
-  return { messages: final, fromTokens, toTokens: estimateTokens(final) };
+  const toTokens = estimateTokens(final);
+  console.log(`[Compress L2] ${afterL1} -> ${toTokens} tokens`);
+  return { messages: final, fromTokens, toTokens };
 }
 
 function safeParseJson(str) {
