@@ -253,6 +253,31 @@ ssh server 'cd /path/to/app && npm install && pip install openpyxl reportlab pyp
 
 ## 更新日志
 
+### 2026-05-22 — Artifact 体验全链路打磨 & 反馈带对话 ID
+
+**Bug 反馈带上当前对话 ID（新增）：**
+- `showBugReportModal()` 自动读 `activeThread()?.id`，模态里展示并随提交 POST 给 `/api/bug-report`
+- 服务端写进 `bug-reports.json` 那条记录 + 通知邮件正文里附 thread id，admin 一键跳转看上下文
+- 无 active thread 时（首页等）模态不显示该行，原行为不变
+
+**Artifact 生成全链路打磨（修复）：**
+- **决策策略**：简单问题不再硬塞进 artifact，AI 先反问"要做成文档吗"再决定；明确要求"生成文档 / 报告 / 白皮书"才走 `create_artifact`
+- **docx 流程修正**：docx 生成前先弹 option 让用户确认风格 / 大纲 / 长度，不再生成完才问；docx 预览面板直显（或单次转 html），不再触发模型重复生成一份 html 副本
+- **进度条覆盖**：所有 `create_artifact` / Office 文件生成路径统一发进度事件，前端在 artifact 列表项 / 对话气泡上稳定显示"生成中"
+- **option 位置**：选项块统一渲染在 message 末尾，修复出现在输出中段无法识别成 chip 的 bug
+- **重复 / 空文档防御**：服务端拦截 body 为空或长度过短的 `create_artifact`，并把同 thread 同 title 的二次写入走 upsert（去重）；agent 重试不再生成空文档或重复文档
+
+**Agent 可读回已有 artifact（新增）：**
+- 新增工具 `list_artifacts(thread_id?)` 返回 `{id, title, type, updated_at}`、`get_artifact(id)` 返回完整 body
+- system prompt 告知模型"已生成文档都是持久的"，用户说"改一下"时先 `list_artifacts` → `get_artifact` 读原文 → 增量改后 upsert
+- 配合上面去重逻辑，文档列表不再每次"修改"都长出一个新条目
+
+**Dogfooding 流程验证：**
+- 本批 5 个 issue（#29 #31 #33 #35 #37）全部通过 `@claude` agent loop 自动开 PR → CI → 合 dev → 本地 :3141 QA → ff-merge dev → main → auto-deploy 完成
+- 用 #29 给的 thread id 复现 bug 提 #31/#33/#35/#37，标准 dogfooding 闭环
+
+---
+
 ### 2026-05-21 — UX 体验细节复刻 & CI/CD agent loop & LaTeX 渲染
 
 **LaTeX 数学公式渲染（新增）：**

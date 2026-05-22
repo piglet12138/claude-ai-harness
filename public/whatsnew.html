@@ -244,6 +244,61 @@
       <div class="timeline">
 
         <div class="entry highlight">
+          <div class="entry-date">2026-05-22</div>
+          <div class="entry-title">
+            <span class="tag tag-feat">feat</span>
+            <span class="zh">反馈带上对话 ID，bug 复现一步到位</span>
+            <span class="en">Bug reports auto-attach conversation ID</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">反馈表单现在自动带上当前对话 ID 并落进通知邮件，省去用户手抄。管理员能直接点进对应对话看上下文。</span>
+            <span class="en">The bug-report modal now auto-attaches the active thread ID and includes it in notification emails — admins can jump straight into the conversation context.</span>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">2026-05-22</div>
+          <div class="entry-title">
+            <span class="tag tag-fix">fix</span>
+            <span class="zh">Artifact 生成全链路体验改进</span>
+            <span class="en">Artifact generation pipeline polish</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">一波连续修复：
+              <ul>
+                <li>简单问题不再硬塞进 artifact，AI 先反问"要做成文档吗"再决定</li>
+                <li>docx 生成前先弹选项让用户确认风格 / 大纲，不再生成完才问</li>
+                <li>预览面板支持 docx 直显，不再重复生成一份 html 副本</li>
+                <li>进度条覆盖所有 artifact / Office 文件生成路径</li>
+                <li>选项块从输出中段漂浮的 bug 修复，统一渲染在 message 末尾</li>
+                <li>服务端拦截空 / 过短的 create_artifact，避免重试导致的空文档与重复</li>
+              </ul></span>
+            <span class="en">A batch of artifact-related fixes:
+              <ul>
+                <li>Simple questions no longer get force-shunted into artifacts — model asks first</li>
+                <li>For docx whitepapers, style/outline options now appear BEFORE generation, not after</li>
+                <li>Preview pane renders docx directly — no more parallel HTML regeneration</li>
+                <li>Progress indicators now cover all artifact / Office generation paths</li>
+                <li>Option blocks no longer float mid-message — consistently rendered at the end</li>
+                <li>Server rejects empty / under-length create_artifact calls — no more empty-doc spam from retries</li>
+              </ul></span>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">2026-05-22</div>
+          <div class="entry-title">
+            <span class="tag tag-feat">feat</span>
+            <span class="zh">Agent 可读回历史文档增量修改</span>
+            <span class="en">Agents can now read &amp; edit existing artifacts</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">新增 <code>list_artifacts</code> / <code>get_artifact</code> 工具。用户说"把第二章再扩两段"时，AI 先列出当前对话已有文档、读出原文，基于现有内容增量修改后 upsert —— 不再每次从零重新生成。</span>
+            <span class="en">New <code>list_artifacts</code> / <code>get_artifact</code> tools. When users say "expand chapter two", the model now lists existing thread documents, reads the current body, and patches in place instead of regenerating from scratch.</span>
+          </div>
+        </div>
+
+        <div class="entry">
           <div class="entry-date">2026-05-21</div>
           <div class="entry-title">
             <span class="tag tag-feat">feat</span>
