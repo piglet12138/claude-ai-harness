@@ -253,7 +253,12 @@ ssh server 'cd /path/to/app && npm install && pip install openpyxl reportlab pyp
 
 ## 更新日志
 
-### 2026-05-21 — UX 体验细节复刻 & CI/CD agent loop
+### 2026-05-21 — UX 体验细节复刻 & CI/CD agent loop & LaTeX 渲染
+
+**LaTeX 数学公式渲染（新增）：**
+- 基于 KaTeX：行内 `$...$` 和块级 `$$...$$` 公式现在直接渲染成排版好的数学表达式
+- 适用场景：反向传播推导、损失函数、积分号、矩阵等密集公式不再原文露出
+- 零额外构建步骤：CSS/JS 通过 CDN 引入，关键 CSS inline
 
 **UX 改进（一次性补齐 7 项 claude.ai 体验差距）：**
 - Markdown 渲染补全：链接 `[text](url)` 可点击、有序列表 `1.` 渲染成 `<ol>`、`*italic*` / `_italic_` 渲染成 `<em>`、代码块加工具栏（语言标签 + 一键复制 + 「已复制」反馈）
