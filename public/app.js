@@ -136,6 +136,7 @@ function wireEvents() {
   document.querySelector("#switchToLogin")?.addEventListener("click", (e) => { e.preventDefault(); showLoginForm(); });
   els.logout.addEventListener("click", logout);
   document.querySelector("#bugReportBtn")?.addEventListener("click", showBugReportModal);
+  document.querySelector("#memoryBtn")?.addEventListener("click", showMemoryModal);
   els.newChat.addEventListener("click", () => {
     state.docAutoOpenSuppressedThreadId = "";
     createThread();
@@ -475,6 +476,95 @@ function showBugReportModal() {
       msg.style.color = "var(--accent)";
       modal.querySelector(".bug-submit").disabled = false;
       modal.querySelector(".bug-submit").textContent = "提交";
+    }
+  });
+}
+
+async function showMemoryModal() {
+  document.querySelector(".memory-modal")?.remove();
+  const modal = document.createElement("div");
+  modal.className = "memory-modal";
+  modal.innerHTML = `
+    <div class="memory-modal-backdrop"></div>
+    <div class="memory-modal-card">
+      <h3>长期记忆</h3>
+      <p>模型会主动记住你的身份 / 偏好 / 项目，跨对话沿用。你可以在这里查看、编辑或清空。</p>
+      <textarea id="memoryText" rows="8" placeholder="暂无记忆内容..."></textarea>
+      <div class="memory-char-count" id="memoryCharCount">0 行 / 0 字符（上限 4000）</div>
+      <div class="memory-modal-actions">
+        <button class="memory-clear-btn">清空全部</button>
+        <button class="memory-cancel-btn">取消</button>
+        <button class="memory-save-btn">保存</button>
+      </div>
+      <div class="memory-msg" id="memoryMsg"></div>
+    </div>`;
+  document.body.append(modal);
+
+  const textarea = modal.querySelector("#memoryText");
+  const charCount = modal.querySelector("#memoryCharCount");
+  const saveBtn = modal.querySelector(".memory-save-btn");
+  const msg = modal.querySelector("#memoryMsg");
+
+  function updateCount() {
+    const len = textarea.value.length;
+    const lines = textarea.value ? textarea.value.split("\n").length : 0;
+    charCount.textContent = `${lines} 行 / ${len} 字符（上限 4000）`;
+    const over = len > 4000;
+    charCount.classList.toggle("over-limit", over);
+    saveBtn.disabled = over;
+  }
+
+  // Load current memory
+  try {
+    const resp = await fetch("/api/memory");
+    if (resp.ok) {
+      const data = await resp.json();
+      textarea.value = data.content || "";
+      updateCount();
+    }
+  } catch {}
+
+  textarea.addEventListener("input", updateCount);
+
+  modal.querySelector(".memory-cancel-btn").addEventListener("click", () => modal.remove());
+  modal.querySelector(".memory-modal-backdrop").addEventListener("click", () => modal.remove());
+
+  modal.querySelector(".memory-clear-btn").addEventListener("click", async () => {
+    if (!await showConfirmModal("确定清空全部长期记忆？清空后无法恢复。", { danger: true })) return;
+    try {
+      const resp = await fetch("/api/memory", { method: "DELETE" });
+      if (!resp.ok) throw new Error((await resp.json()).error || "清空失败");
+      textarea.value = "";
+      updateCount();
+      msg.textContent = "已清空";
+      msg.style.color = "#4d9950";
+      setTimeout(() => modal.remove(), 1000);
+    } catch (e) {
+      msg.textContent = String(e.message);
+      msg.style.color = "var(--accent)";
+    }
+  });
+
+  saveBtn.addEventListener("click", async () => {
+    const content = textarea.value;
+    if (content.length > 4000) return;
+    saveBtn.disabled = true;
+    saveBtn.textContent = "保存中...";
+    try {
+      const resp = await fetch("/api/memory", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      if (!resp.ok) throw new Error((await resp.json()).error || "保存失败");
+      msg.textContent = "已保存";
+      msg.style.color = "#4d9950";
+      setTimeout(() => modal.remove(), 1000);
+    } catch (e) {
+      msg.textContent = String(e.message);
+      msg.style.color = "var(--accent)";
+      saveBtn.disabled = false;
+      saveBtn.textContent = "保存";
     }
   });
 }

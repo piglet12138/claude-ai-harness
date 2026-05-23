@@ -761,6 +761,13 @@ const server = http.createServer(async (req, res) => {
       return json(res, { ok: true });
     }
 
+    if (req.method === "DELETE" && url.pathname === "/api/memory") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      dbMemory.replace(session.userId, "");
+      return json(res, { ok: true });
+    }
+
     // Usage stats — user sees own, admin sees all
     if (req.method === "GET" && url.pathname === "/api/usage") {
       const session = readSession(req);
