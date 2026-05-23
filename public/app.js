@@ -163,15 +163,6 @@ function wireEvents() {
   document.querySelector("#themeToggle")?.addEventListener("click", toggleTheme);
   els.copyDoc?.addEventListener("click", copyCurrentDoc);
   els.shareDoc?.addEventListener("click", shareCurrentDoc);
-  // Show share button if Web Share API is available (mobile)
-  if (els.shareDoc) {
-    if (navigator.share) {
-      
-      els.shareDoc.classList.add("visible");
-    } else {
-      els.shareDoc.classList.remove("visible");
-    }
-  }
   els.downloadDoc.addEventListener("click", () => {
     const doc = activeDocument();
     if (!doc) return;
@@ -198,6 +189,10 @@ function wireEvents() {
     state.docAutoOpenSuppressedThreadId = state.activeId;
     renderDocumentPanel();
     renderDocFab();
+  });
+  document.querySelector("#docOverflowBtn")?.addEventListener("click", () => {
+    const sec = document.querySelector("#docSecondaryActions");
+    if (sec) sec.classList.toggle("open");
   });
   els.toggleDocPanel.addEventListener("click", () => {
     state.docOpen = !state.docOpen;
@@ -717,6 +712,7 @@ async function showSettingsModal(defaultTab = "memory") {
       <div class="settings-tabs" role="tablist">
         <button class="settings-tab" data-tab="memory" role="tab">长期记忆</button>
         <button class="settings-tab" data-tab="mydata" role="tab">我的数据</button>
+        <button class="settings-tab" data-tab="shares" role="tab">我的分享</button>
         <button class="settings-tab" data-tab="about" role="tab">关于</button>
       </div>
       <div class="settings-content" id="settingsContent"></div>
@@ -731,6 +727,7 @@ async function showSettingsModal(defaultTab = "memory") {
     content.innerHTML = "";
     if (tabName === "memory") await renderMemoryTabContent(content);
     else if (tabName === "mydata") await renderMyDataTabContent(content);
+    else if (tabName === "shares") await renderSharesTabContent(content);
     else renderAboutTabContent(content);
   }
 
@@ -951,6 +948,73 @@ function renderAboutTabContent(container) {
     </div>`;
 }
 
+async function renderSharesTabContent(container) {
+  container.innerHTML = `<div class="shares-loading">加载中...</div>`;
+  let shares = [];
+  try {
+    shares = await fetchJson("/api/share/list");
+  } catch {
+    container.innerHTML = `<div class="shares-loading">加载失败</div>`;
+    return;
+  }
+
+  if (!shares.length) {
+    container.innerHTML = `<div class="shares-empty">暂无分享记录。在对话或文档上点击「分享」即可生成链接。</div>`;
+    return;
+  }
+
+  const now = Date.now();
+  function daysLeft(expiresAt) {
+    const d = Math.ceil((expiresAt - now) / 86400000);
+    return d > 0 ? `还剩 ${d} 天` : "已过期";
+  }
+  function formatDate(ts) {
+    return new Date(ts).toLocaleDateString("zh-CN");
+  }
+
+  container.innerHTML = `
+    <div class="shares-list" id="sharesList">
+      ${shares.map(s => {
+        const revoked = !!s.revoked_at;
+        const expired = !revoked && now > s.expires_at;
+        const kindIcon = s.kind === "thread" ? "💬" : "📄";
+        const statusText = revoked ? "已撤销" : expired ? "已过期" : daysLeft(s.expires_at);
+        return `<div class="shares-item${revoked ? " shares-item-revoked" : ""}" data-id="${escapeHtml(s.id)}" data-url="${escapeHtml(s.url)}" data-kind="${escapeHtml(s.kind)}" data-revoked="${revoked}">
+          <div class="shares-item-icon">${kindIcon}</div>
+          <div class="shares-item-info">
+            <div class="shares-item-title">${escapeHtml(s.title || "未命名")}</div>
+            <div class="shares-item-meta">${formatDate(s.created_at)} · ${statusText} · 浏览 ${s.view_count}${s.kind === "thread" ? ` / Fork ${s.fork_count}` : ""}</div>
+          </div>
+          <div class="shares-item-actions">
+            ${!revoked && !expired ? `<button class="shares-copy-btn" title="复制链接">复制</button>` : ""}
+            ${!revoked && !expired ? `<a class="shares-open-btn" href="${escapeHtml(s.url)}" target="_blank" rel="noopener">打开</a>` : ""}
+            ${!revoked ? `<button class="shares-revoke-btn" title="撤销">撤销</button>` : ""}
+          </div>
+        </div>`;
+      }).join("")}
+    </div>`;
+
+  container.querySelectorAll(".shares-copy-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const item = btn.closest(".shares-item");
+      const url = item.dataset.url;
+      navigator.clipboard.writeText(url).then(() => { btn.textContent = "已复制"; setTimeout(() => { btn.textContent = "复制"; }, 1500); });
+    });
+  });
+
+  container.querySelectorAll(".shares-revoke-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const item = btn.closest(".shares-item");
+      if (!await showConfirmModal("确定撤销此分享链接？撤销后访问者将看到「已撤销」提示。", { danger: true })) return;
+      const id = item.dataset.id;
+      try {
+        await fetch(`/api/share/${id}/revoke`, { method: "POST" });
+        await renderSharesTabContent(container);
+      } catch { btn.textContent = "失败"; }
+    });
+  });
+}
+
 async function logout() {
   await fetch("/api/logout", { method: "POST" });
   state.authenticated = false;
@@ -1011,6 +1075,34 @@ async function showChat() {
   fixStuckToolCards();
   // Resume any pending long-doc background jobs
   resumeLongDocJobs();
+  // Handle fork return flow: /app?fork=<shareId>
+  const forkId = new URLSearchParams(location.search).get("fork");
+  if (forkId) {
+    history.replaceState(null, "", location.pathname);
+    forkThreadShare(forkId);
+  }
+}
+
+async function forkThreadShare(shareId) {
+  try {
+    const resp = await fetch(`/api/share/${shareId}/fork`, { method: "POST" });
+    const data = await resp.json();
+    if (!data.threadId) throw new Error("fork failed");
+    const serverThreads = await fetchJson("/api/threads");
+    const localMap = new Map(state.threads.map(t => [t.id, t]));
+    state.threads = serverThreads.map(t => {
+      const local = localMap.get(t.id);
+      return { id: t.id, title: t.title, archived: !!t.archived, starred: !!t.starred,
+        createdAt: t.created_at, updatedAt: t.updated_at,
+        messages: local?.messages || [], documents: local?.documents || [], _loaded: local?._loaded || false };
+    });
+    state.activeId = data.threadId;
+    render();
+    await loadThreadData(data.threadId, true);
+    render();
+  } catch (e) {
+    console.error("[Fork]", e.message);
+  }
 }
 
 // Save partial content and warn if user leaves/refreshes during streaming
@@ -1324,6 +1416,7 @@ function buildThreadItem(thread, query) {
     e.stopPropagation();
     showContextMenu(e.currentTarget, [
       { label: thread.starred ? "取消收藏" : "收藏", action: () => toggleStarThread(thread.id) },
+      { label: "分享对话", action: () => { state.activeId = thread.id; shareCurrentThread(); } },
       { label: "重命名", action: () => renameThread(thread.id) },
       { label: "删除", action: () => deleteThread(thread.id), danger: true },
     ]);
@@ -3134,49 +3227,101 @@ async function copyCurrentDoc() {
 function shareCurrentDoc() {
   const doc = activeDocument();
   if (!doc) return;
-  const btn = els.shareDoc;
-  const orig = btn.textContent;
-  btn.textContent = "生成链接...";
-  btn.disabled = true;
-
   const title = doc.title || "文档";
   const isHtml = doc.type === "html";
   const html = isHtml ? doc.content : documentHtml(doc);
-
-  // Step 1: create a share link on server
-  fetch("/api/share", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title, html }),
-  })
-  .then(r => r.json())
-  .then(data => {
-    if (!data.url) throw new Error(data.error || "创建链接失败");
-    // Step 2: share the URL (synchronous from .then — user gesture may be lost)
-    // So we try share, but also show a copyable link as fallback
-    const shareUrl = data.url;
-    if (navigator.share) {
-      return navigator.share({ title, url: shareUrl }).then(() => {
-        btn.textContent = "已分享";
-      }).catch(e => {
-        if (e.name === "AbortError") return;
-        // Share failed — show copy dialog
-        showShareLink(shareUrl, title);
-        btn.textContent = "链接已生成";
-      });
-    } else {
-      showShareLink(shareUrl, title);
-      btn.textContent = "链接已生成";
-    }
-  })
-  .catch(e => {
-    console.log("[Share] Error:", e.message);
-    btn.textContent = "分享失败";
-  })
-  .finally(() => {
-    btn.disabled = false;
-    setTimeout(() => (btn.textContent = orig), 2000);
+  showShareMethodModal(title, () => {
+    return fetch("/api/share", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title, html }),
+    }).then(r => r.json()).then(d => {
+      if (!d.url) throw new Error(d.error || "创建链接失败");
+      return d.url;
+    });
   });
+}
+
+async function shareCurrentThread() {
+  const thread = state.threads.find(t => t.id === state.activeId);
+  if (!thread) return;
+  const title = thread.title || "对话";
+  showShareMethodModal(title, () => {
+    return fetch("/api/share/thread", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ threadId: thread.id }),
+    }).then(r => r.json()).then(d => {
+      if (!d.url) throw new Error(d.error || "创建链接失败");
+      return d.url;
+    });
+  });
+}
+
+function showShareMethodModal(title, fetchUrl) {
+  const existing = document.querySelector(".share-method-overlay");
+  if (existing) existing.remove();
+
+  let cachedUrl = null;
+  let fetchPromise = null;
+
+  const overlay = document.createElement("div");
+  overlay.className = "share-method-overlay";
+  overlay.innerHTML = `
+    <div class="share-method-modal">
+      <h3>分享「${escapeHtml(title)}」</h3>
+      <div class="share-method-spinner" id="shareMethodSpinner">生成链接中...</div>
+      <div class="share-method-actions hidden" id="shareMethodActions">
+        ${navigator.share ? `<button class="share-method-btn" id="shareSystemBtn">系统分享</button>` : ""}
+        <button class="share-method-btn share-method-btn-primary" id="shareCopyBtn">复制链接</button>
+        <button class="share-method-btn" id="shareCloseBtn">关闭</button>
+      </div>
+      <div class="share-method-error hidden" id="shareMethodError"></div>
+    </div>`;
+  document.body.append(overlay);
+
+  const spinner = overlay.querySelector("#shareMethodSpinner");
+  const actions = overlay.querySelector("#shareMethodActions");
+  const errorEl = overlay.querySelector("#shareMethodError");
+
+  function showActions(url) {
+    cachedUrl = url;
+    spinner.classList.add("hidden");
+    actions.classList.remove("hidden");
+  }
+  function showError(msg) {
+    spinner.classList.add("hidden");
+    errorEl.textContent = msg;
+    errorEl.classList.remove("hidden");
+  }
+
+  fetchPromise = fetchUrl().then(url => showActions(url)).catch(e => showError(e.message));
+
+  overlay.querySelector("#shareCopyBtn").addEventListener("click", async () => {
+    if (!cachedUrl) {
+      try { const url = await fetchPromise; if (cachedUrl) {} } catch {}
+    }
+    if (!cachedUrl) return;
+    await navigator.clipboard.writeText(cachedUrl).catch(() => {});
+    overlay.querySelector("#shareCopyBtn").textContent = "已复制！";
+    setTimeout(() => overlay.remove(), 1200);
+  });
+
+  overlay.querySelector("#shareSystemBtn")?.addEventListener("click", async () => {
+    if (!cachedUrl) {
+      try { await fetchPromise; } catch { return; }
+    }
+    if (!cachedUrl) return;
+    try {
+      await navigator.share({ title, url: cachedUrl });
+      overlay.remove();
+    } catch (e) {
+      if (e.name !== "AbortError") showError("系统分享失败，请复制链接");
+    }
+  });
+
+  overlay.querySelector("#shareCloseBtn").addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
 }
 
 // Show a modal with the share link for manual copy

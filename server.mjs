@@ -8,15 +8,13 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
-import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage, dbRatings, dbPv, dbTelemetry, dbToolResultSummary, dbMemory, dbUserData } from "./db.mjs";
+import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage, dbRatings, dbPv, dbTelemetry, dbToolResultSummary, dbMemory, dbUserData, dbShares } from "./db.mjs";
 const XLSX = require("xlsx");
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TableRow, TableCell, Table, WidthType, BorderStyle, PageBreak } = require("docx");
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
 
-// Temporary share links (in-memory, expire after 24h)
-const shareStore = new Map();
 // Generated file store (metadata persisted as .meta.json sidecar files)
 const fileStore = new Map();
 const FILES_DIR = path.join(root, ".generated-files");
@@ -42,9 +40,6 @@ try {
 const longDocJobs = new Map();
 setInterval(() => {
   const now = Date.now();
-  for (const [id, entry] of shareStore) {
-    if (now > entry.expires) shareStore.delete(id);
-  }
   for (const [id, entry] of fileStore) {
     if (now > entry.expires) {
       fs.unlink(entry.filePath).catch(() => {});
@@ -1015,33 +1010,233 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ── Share: create temporary link ──
+    // ── Share: create persistent doc link (SQLite) ──
     if (req.method === "POST" && url.pathname === "/api/share") {
-      if (!readSession(req)) return json(res, { error: "Unauthorized" }, 401);
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
       const body = await readJson(req);
       const title = String(body?.title || "文档").slice(0, 200);
       const html = String(body?.html || "").slice(0, 2_000_000);
       if (!html) return json(res, { error: "No content" }, 400);
       const id = crypto.randomBytes(8).toString("hex");
-      shareStore.set(id, { title, html, expires: Date.now() + 24 * 3600_000 });
-      const shareUrl = `https://${req.headers.host || "claude.yaoyuheng2001.me"}/s/${id}`;
-      return json(res, { url: shareUrl, id });
+      const expiresAt = Date.now() + 30 * 24 * 3600_000;
+      dbShares.create(id, "doc", session.userId, title, { html }, expiresAt);
+      const proto = req.headers["x-forwarded-proto"] || "https";
+      const host = req.headers.host || "claude.yaoyuheng2001.me";
+      const shareUrl = `${proto}://${host}/s/${id}`;
+      return json(res, { url: shareUrl, id, expiresAt });
     }
 
-    // ── Share: view shared document ──
-    if (req.method === "GET" && url.pathname.startsWith("/s/")) {
+    // ── Share: create thread share link ──
+    if (req.method === "POST" && url.pathname === "/api/share/thread") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const body = await readJson(req);
+      const threadId = String(body?.threadId || "");
+      if (!threadId) return json(res, { error: "threadId required" }, 400);
+      const thread = dbThreads.get(threadId, session.userId);
+      if (!thread) return json(res, { error: "Thread not found" }, 404);
+      const rawMessages = dbMessages.list(threadId);
+      const messages = rawMessages.map(m => {
+        const content = Array.isArray(m.content) ? m.content : [{ type: "text", text: String(m.content) }];
+        const filtered = content.map(block => {
+          if (block.type === "image" || block.type === "document") return { type: "placeholder", text: "[附件已隐藏]" };
+          return block;
+        });
+        return { role: m.role, content: filtered };
+      });
+      const documents = dbDocuments.list(threadId).map(d => ({
+        id: d.id, title: d.title, type: d.type, content: d.content, language: d.language,
+      }));
+      const id = crypto.randomBytes(8).toString("hex");
+      const expiresAt = Date.now() + 30 * 24 * 3600_000;
+      dbShares.create(id, "thread", session.userId, thread.title, { messages, documents }, expiresAt);
+      const proto = req.headers["x-forwarded-proto"] || "https";
+      const host = req.headers.host || "claude.yaoyuheng2001.me";
+      const shareUrl = `${proto}://${host}/s/t/${id}`;
+      return json(res, { url: shareUrl, id, expiresAt });
+    }
+
+    // ── Share: fork a thread share into current user's account ──
+    if (req.method === "POST" && url.pathname.match(/^\/api\/share\/([a-f0-9]+)\/fork$/)) {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const shareId = url.pathname.match(/^\/api\/share\/([a-f0-9]+)\/fork$/)[1];
+      const share = dbShares.get(shareId);
+      if (!share) return json(res, { error: "Share not found" }, 404);
+      if (share.revoked_at) return json(res, { error: "Share has been revoked" }, 410);
+      if (Date.now() > share.expires_at) return json(res, { error: "Share has expired" }, 410);
+      if (share.kind !== "thread") return json(res, { error: "Not a thread share" }, 400);
+      const newThreadId = crypto.randomUUID();
+      const now = new Date(Date.now() + 8 * 3600_000).toISOString().replace("T", " ").slice(0, 19);
+      dbThreads.create(newThreadId, session.userId, `${share.title || "对话"} (fork)`, 0, 0, now, now);
+      const { messages, documents } = share.payload;
+      const msgs = (messages || []).map(m => ({ ...m, id: crypto.randomUUID() }));
+      dbMessages.appendBatch(newThreadId, msgs);
+      for (const doc of (documents || [])) {
+        dbDocuments.upsert(newThreadId, { ...doc, id: crypto.randomUUID() });
+      }
+      dbShares.incrementFork(shareId);
+      return json(res, { threadId: newThreadId });
+    }
+
+    // ── Share: list current user's shares ──
+    if (req.method === "GET" && url.pathname === "/api/share/list") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const proto = req.headers["x-forwarded-proto"] || "https";
+      const host = req.headers.host || "claude.yaoyuheng2001.me";
+      const rows = dbShares.listByUser(session.userId).map(r => ({
+        ...r,
+        url: r.kind === "thread" ? `${proto}://${host}/s/t/${r.id}` : `${proto}://${host}/s/${r.id}`,
+      }));
+      return json(res, rows);
+    }
+
+    // ── Share: revoke a share ──
+    if (req.method === "POST" && url.pathname.match(/^\/api\/share\/([a-f0-9]+)\/revoke$/)) {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const shareId = url.pathname.match(/^\/api\/share\/([a-f0-9]+)\/revoke$/)[1];
+      dbShares.revoke(shareId, session.userId);
+      return json(res, { ok: true });
+    }
+
+    // ── Share: view shared document (SQLite) ──
+    if (req.method === "GET" && url.pathname.startsWith("/s/") && !url.pathname.startsWith("/s/t/")) {
       const id = url.pathname.slice(3);
-      const entry = shareStore.get(id);
-      if (!entry) {
+      const share = dbShares.get(id);
+      if (!share || share.kind !== "doc") {
         res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
-        res.end("<html><body style='font-family:system-ui;padding:40px;text-align:center'><h2>链接已过期</h2><p>分享链接有效期为 24 小时</p></body></html>");
+        res.end("<html><body style='font-family:system-ui;padding:40px;text-align:center'><h2>链接不存在</h2><p>分享链接不存在或已过期</p></body></html>");
         return;
       }
+      if (share.revoked_at) {
+        res.writeHead(410, { "content-type": "text/html; charset=utf-8" });
+        res.end("<html><body style='font-family:system-ui;padding:40px;text-align:center'><h2>链接已撤销</h2><p>分享者已撤销此链接</p></body></html>");
+        return;
+      }
+      if (Date.now() > share.expires_at) {
+        res.writeHead(410, { "content-type": "text/html; charset=utf-8" });
+        res.end("<html><body style='font-family:system-ui;padding:40px;text-align:center'><h2>链接已过期</h2><p>分享链接有效期为 30 天</p></body></html>");
+        return;
+      }
+      dbShares.incrementView(id);
       res.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
       });
-      res.end(entry.html);
+      res.end(share.payload.html);
+      return;
+    }
+
+    // ── Share: view shared thread ──
+    if (req.method === "GET" && url.pathname.startsWith("/s/t/")) {
+      const id = url.pathname.slice(5);
+      const share = dbShares.get(id);
+      if (!share || share.kind !== "thread") {
+        res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
+        res.end("<html><body style='font-family:system-ui;padding:40px;text-align:center'><h2>链接不存在</h2></body></html>");
+        return;
+      }
+      if (share.revoked_at) {
+        res.writeHead(410, { "content-type": "text/html; charset=utf-8" });
+        res.end("<html><body style='font-family:system-ui;padding:40px;text-align:center'><h2>链接已撤销</h2><p>分享者已撤销此链接</p></body></html>");
+        return;
+      }
+      if (Date.now() > share.expires_at) {
+        res.writeHead(410, { "content-type": "text/html; charset=utf-8" });
+        res.end("<html><body style='font-family:system-ui;padding:40px;text-align:center'><h2>链接已过期</h2><p>分享链接有效期为 30 天</p></body></html>");
+        return;
+      }
+      dbShares.incrementView(id);
+      const { messages, documents } = share.payload;
+      const createdDate = new Date(share.created_at).toLocaleDateString("zh-CN");
+      const proto = req.headers["x-forwarded-proto"] || "https";
+      const host = req.headers.host || "claude.yaoyuheng2001.me";
+      const forkUrl = `${proto}://${host}/app?fork=${id}`;
+      const loginForkUrl = `${proto}://${host}/app?action=login&return=/s/t/${id}&fork=${id}`;
+
+      function renderMessageContent(content) {
+        if (!Array.isArray(content)) return escapeHtml(String(content));
+        return content.map(block => {
+          if (block.type === "text") return `<span>${escapeHtml(block.text)}</span>`;
+          if (block.type === "placeholder") return `<em class="share-placeholder">${escapeHtml(block.text)}</em>`;
+          return `<em class="share-placeholder">[内容]</em>`;
+        }).join("");
+      }
+
+      const messagesHtml = (messages || []).map(m => `
+        <div class="share-msg share-msg-${m.role}">
+          <div class="share-msg-role">${m.role === "user" ? "用户" : "Claude"}</div>
+          <div class="share-msg-content">${renderMessageContent(m.content)}</div>
+        </div>`).join("\n");
+
+      const docsHtml = (documents || []).length > 0 ? `
+        <div class="share-docs">
+          <h3>相关文档</h3>
+          ${(documents || []).map(d => `<div class="share-doc-card"><strong>${escapeHtml(d.title)}</strong></div>`).join("")}
+        </div>` : "";
+
+      const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(share.title || "分享的对话")} — Claude AI Harness</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#f8f8f8;color:#1a1a1a;min-height:100vh}
+.share-header{background:#fff;border-bottom:1px solid #e5e5e5;padding:14px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.share-logo{font-weight:700;font-size:18px;color:#1a1a1a;text-decoration:none}
+.share-title{flex:1;font-size:16px;font-weight:600;color:#1a1a1a;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.share-fork-btn{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:14px;cursor:pointer;text-decoration:none;white-space:nowrap}
+.share-fork-btn:hover{background:#1d4ed8}
+.share-meta{background:#fff;border-bottom:1px solid #e5e5e5;padding:10px 24px;font-size:13px;color:#666}
+.share-body{max-width:800px;margin:0 auto;padding:24px 16px}
+.share-msg{padding:16px;margin-bottom:12px;border-radius:12px;line-height:1.6}
+.share-msg-user{background:#fff;border:1px solid #e5e5e5}
+.share-msg-assistant{background:#f0f7ff;border:1px solid #c7dfff}
+.share-msg-role{font-size:12px;font-weight:600;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em}
+.share-msg-content{font-size:15px;white-space:pre-wrap;word-wrap:break-word}
+.share-msg-content span{display:block}
+.share-placeholder{color:#999;font-style:italic}
+.share-docs{margin-top:24px;padding:16px;background:#fff;border-radius:12px;border:1px solid #e5e5e5}
+.share-docs h3{font-size:14px;margin-bottom:12px;color:#666}
+.share-doc-card{padding:8px 12px;background:#f8f8f8;border-radius:8px;font-size:14px;margin-bottom:8px}
+.share-footer{max-width:800px;margin:0 auto;padding:24px 16px;text-align:center;font-size:14px;color:#666;border-top:1px solid #e5e5e5;margin-top:24px}
+.share-footer a{color:#2563eb;text-decoration:none}
+@media(max-width:600px){.share-header{padding:12px 16px}.share-body{padding:16px 12px}}
+</style>
+</head>
+<body>
+<header class="share-header">
+  <a class="share-logo" href="/">Claude AI Harness</a>
+  <span class="share-title">${escapeHtml(share.title || "分享的对话")}</span>
+  <a class="share-fork-btn" href="${forkUrl}" id="forkBtn">Fork 继续聊</a>
+</header>
+<div class="share-meta">用户分享于 ${createdDate} · 浏览 ${share.view_count + 1} 次</div>
+<main class="share-body">
+  ${messagesHtml}
+  ${docsHtml}
+</main>
+<footer class="share-footer">
+  想继续这段对话？<a href="${forkUrl}">登录后 Fork 一份</a>，接着和 Claude 聊。
+</footer>
+<script>
+document.getElementById('forkBtn').addEventListener('click', function(e) {
+  e.preventDefault();
+  const url = this.href;
+  fetch('/api/me/summary').then(r => {
+    if (r.ok) { window.location.href = url; }
+    else { window.location.href = ${JSON.stringify(loginForkUrl)}; }
+  }).catch(() => { window.location.href = ${JSON.stringify(loginForkUrl)}; });
+});
+</script>
+</body>
+</html>`;
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end(html);
       return;
     }
 
@@ -2686,7 +2881,7 @@ function readSession(req) {
   if (!token) return null;
   const session = dbSessions.get(token);
   if (!session) return null;
-  return { userId: session.user_id, email: session.email, role: session.role };
+  return { userId: session.userId, email: session.email, role: session.role };
 }
 
 function isRateLimited(ip) {

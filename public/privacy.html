@@ -147,6 +147,16 @@
       <h2>Third-Party Services</h2>
       <p>The application may send your prompts, uploaded content, and images to the configured AI API provider to generate responses. If web search is enabled, search queries may be sent to the configured search provider.</p>
 
+      <h2>Share Links</h2>
+      <p>You can generate a shareable link for any conversation or document to share with others. Key points about share links:</p>
+      <ul>
+        <li><strong>What is exposed</strong> — When sharing a conversation, the link contains all text messages and Artifact documents; images and uploaded file attachments are <strong>not</strong> included and are rendered as "[Attachment hidden]" placeholders. When sharing a document, the link contains the full HTML content of the document.</li>
+        <li><strong>Expiry</strong> — Share links expire after <strong>30 days</strong> by default. After expiry the link returns a "Link expired" message.</li>
+        <li><strong>Revocation</strong> — You can revoke any share link at any time under Settings → My Shares. After revocation, visitors see "The sharer has revoked this link" (HTTP 410) rather than a 404.</li>
+        <li><strong>Fork (continue chatting)</strong> — The share page includes a "Fork &amp; Continue" button. Clicking it creates an independent copy of the conversation in the viewer's account without affecting your original.</li>
+        <li><strong>Persistence</strong> — Share records are stored in the server SQLite database (<code>shares</code> table). When you delete your account, all your share records are deleted as well.</li>
+      </ul>
+
       <h2>Data Sharing</h2>
       <p>Data is shared only with service providers needed to operate the application, such as the configured AI API provider, Google APIs for Docs upload, and optional search APIs. Data is not sold.</p>
 

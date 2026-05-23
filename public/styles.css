@@ -3717,52 +3717,43 @@ img.brand-logo.large {
   padding: 4px 10px;
 }
 
-/* Share button: hidden by default, JS shows it when navigator.share is available */
-.share-btn { display: none !important; }
-.share-btn.visible { display: inline-flex !important; }
-
-/* Share modal */
-.share-modal-overlay {
+/* Share method selection modal */
+.share-method-overlay {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: 1000;
   background: rgba(0,0,0,0.5);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
 }
-.share-modal {
+.share-method-modal {
   background: var(--paper);
   border-radius: 12px;
   padding: 24px;
-  max-width: 440px;
+  max-width: 380px;
   width: 100%;
   box-shadow: var(--shadow);
 }
-.share-modal h3 {
-  margin: 0 0 8px;
+.share-method-modal h3 {
+  margin: 0 0 16px;
   color: var(--ink);
   font-size: 16px;
 }
-.share-link-input {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--ink);
-  font-size: 13px;
-  font-family: var(--font-mono);
-  margin: 12px 0;
-  box-sizing: border-box;
+.share-method-spinner {
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+  padding: 8px 0;
 }
-.share-modal-actions {
+.share-method-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
   justify-content: flex-end;
 }
-.share-copy-btn, .share-close-btn {
+.share-method-btn {
   padding: 8px 16px;
   border-radius: 8px;
   border: 1px solid var(--line);
@@ -3770,14 +3761,79 @@ img.brand-logo.large {
   color: var(--ink);
   cursor: pointer;
   font-size: 13px;
+  transition: background 0.15s;
 }
-.share-copy-btn {
+.share-method-btn:hover { background: var(--bg); }
+.share-method-btn-primary {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
 }
-.share-copy-btn:hover { opacity: 0.9; }
-.share-close-btn:hover { background: var(--bg); }
+.share-method-btn-primary:hover { opacity: 0.9; background: var(--accent); }
+.share-method-error {
+  color: var(--accent);
+  font-size: 13px;
+  margin-top: 10px;
+}
+
+/* Shares tab in settings */
+.shares-loading, .shares-empty {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 20px 0;
+  text-align: center;
+}
+.shares-list { display: flex; flex-direction: column; gap: 10px; }
+.shares-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.shares-item-revoked { opacity: 0.5; }
+.shares-item-icon { font-size: 18px; flex-shrink: 0; margin-top: 2px; }
+.shares-item-info { flex: 1; min-width: 0; }
+.shares-item-title { font-size: 14px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shares-item-meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.shares-item-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; flex-wrap: wrap; }
+.shares-copy-btn, .shares-revoke-btn, .shares-open-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: none;
+  display: inline-block;
+}
+.shares-copy-btn:hover, .shares-open-btn:hover { background: var(--bg); }
+.shares-revoke-btn { color: var(--accent); }
+.shares-revoke-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* Mobile: doc panel ⋯ overflow menu */
+.doc-overflow-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1;
+  display: none;
+}
+.doc-overflow-btn:hover { background: var(--surface); }
+.doc-secondary-actions { display: contents; }
+
+@media (max-width: 720px) {
+  .doc-overflow-btn { display: inline-flex; align-items: center; }
+  .doc-secondary-actions { display: none; }
+  .doc-secondary-actions.open { display: contents; }
+}
 
 /* ─── Inline Modal (replaces window.prompt / window.confirm) ─── */
 .modal-overlay {
