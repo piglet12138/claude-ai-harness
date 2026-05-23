@@ -924,6 +924,142 @@ img.brand-logo.large {
   padding: 0 8px;
 }
 
+#memoryBtn {
+  font-size: 13px;
+  width: auto;
+  padding: 0 8px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Memory Modal
+   ═══════════════════════════════════════════════════════════════ */
+
+.memory-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  animation: ctx-in 0.15s ease-out;
+}
+
+.memory-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.memory-modal-card {
+  position: relative;
+  width: min(520px, calc(100% - 32px));
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+
+.memory-modal-card h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.memory-modal-card > p {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.memory-modal-card textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  padding: 10px 12px;
+  font-size: 13px;
+  resize: vertical;
+  outline: none;
+  line-height: 1.5;
+  min-height: 160px;
+  box-sizing: border-box;
+}
+
+.memory-modal-card textarea:focus {
+  border-color: rgba(192, 90, 50, 0.4);
+}
+
+.memory-char-count {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.memory-char-count.over-limit {
+  color: #c03030;
+  font-weight: 600;
+}
+
+.memory-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.memory-clear-btn {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 13px;
+  background: transparent;
+  color: #c03030;
+  cursor: pointer;
+  margin-right: auto;
+  transition: background 0.15s;
+}
+
+.memory-clear-btn:hover {
+  background: rgba(192, 48, 48, 0.08);
+}
+
+.memory-cancel-btn,
+.memory-save-btn {
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: opacity 0.15s;
+}
+
+.memory-cancel-btn {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.memory-save-btn {
+  background: var(--accent);
+  color: #fff;
+}
+
+.memory-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.memory-msg {
+  margin-top: 8px;
+  font-size: 12px;
+  min-height: 16px;
+  text-align: right;
+}
+
 [data-theme="dark"] .form-error {
   color: #e06050;
 }
