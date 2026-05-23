@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
-import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage, dbRatings, dbPv, dbTelemetry, dbToolResultSummary, dbMemory } from "./db.mjs";
+import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage, dbRatings, dbPv, dbTelemetry, dbToolResultSummary, dbMemory, dbUserData } from "./db.mjs";
 const XLSX = require("xlsx");
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TableRow, TableCell, Table, WidthType, BorderStyle, PageBreak } = require("docx");
 
@@ -766,6 +766,96 @@ const server = http.createServer(async (req, res) => {
       if (!session) return json(res, { error: "Unauthorized" }, 401);
       dbMemory.replace(session.userId, "");
       return json(res, { ok: true });
+    }
+
+    // My Data: summary stats
+    if (req.method === "GET" && url.pathname === "/api/me/summary") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const summary = dbUserData.summary(session.userId);
+      const memMeta = dbMemory.getMeta(session.userId);
+      const user = dbUsers.getById(session.userId);
+      return json(res, {
+        email: session.email,
+        created_at: user?.created_at || "",
+        threads: summary.threads,
+        messages: summary.messages,
+        documents: summary.documents,
+        telemetry: summary.telemetry,
+        memory_chars: (memMeta?.content || "").length,
+      });
+    }
+
+    // My Data: full export (triggers download)
+    if (req.method === "GET" && url.pathname === "/api/me/export") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const user = dbUsers.getById(session.userId);
+      const memMeta = dbMemory.getMeta(session.userId);
+      const threads = dbUserData.getAllThreads(session.userId).map(t => ({
+        ...t,
+        messages: dbMessages.list(t.id),
+        documents: dbDocuments.list(t.id),
+      }));
+      const telemetry = dbUserData.getTelemetry(session.userId);
+      const ratings = dbUserData.getRatings(session.userId);
+      let bugReports = [];
+      try {
+        const reportsFile = path.join(root, "bug-reports.json");
+        const all = JSON.parse(await fs.readFile(reportsFile, "utf8"));
+        bugReports = all.filter(r => r.email === session.email);
+      } catch {}
+      const exportData = {
+        exported_at: new Date().toISOString(),
+        user: { email: session.email, created_at: user?.created_at || "" },
+        memory: { content: memMeta?.content || "", updated_at: memMeta?.updated_at || "" },
+        threads,
+        telemetry,
+        ratings,
+        bug_reports: bugReports,
+      };
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const filename = `my-data-${session.email.replace(/[^a-zA-Z0-9]/g, "-")}-${dateStr}.json`;
+      res.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "content-disposition": `attachment; filename="${filename}"`,
+        "cache-control": "no-store",
+      });
+      res.end(JSON.stringify(exportData, null, 2));
+      return;
+    }
+
+    // My Data: delete all user data
+    if (req.method === "DELETE" && url.pathname === "/api/me") {
+      const session = readSession(req);
+      if (!session) return json(res, { error: "Unauthorized" }, 401);
+      const body = await readJson(req, 1024);
+      if (body?.confirm !== "DELETE_ALL_MY_DATA") {
+        return json(res, { error: "confirm 字段必须为 DELETE_ALL_MY_DATA" }, 400);
+      }
+      // Remove matching bug-reports entries and their images
+      try {
+        const reportsFile = path.join(root, "bug-reports.json");
+        let reports = JSON.parse(await fs.readFile(reportsFile, "utf8"));
+        const toDelete = reports.filter(r => r.email === session.email);
+        reports = reports.filter(r => r.email !== session.email);
+        await fs.writeFile(reportsFile, JSON.stringify(reports, null, 2), "utf8");
+        for (const report of toDelete) {
+          for (const imgPath of (report.images || [])) {
+            const fname = path.basename(imgPath);
+            fs.unlink(path.join(root, "bug-images", fname)).catch(() => {});
+          }
+        }
+      } catch {}
+      // Delete all DB data (telemetry, ratings, usage, then user — cascades sessions/threads/memory)
+      dbUserData.deleteAll(session.userId);
+      // Invalidate session cookie
+      res.writeHead(204, {
+        "set-cookie": "claude_lite=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+        "cache-control": "no-store",
+      });
+      res.end();
+      return;
     }
 
     // Usage stats — user sees own, admin sees all

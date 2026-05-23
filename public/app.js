@@ -137,6 +137,7 @@ function wireEvents() {
   els.logout.addEventListener("click", logout);
   document.querySelector("#bugReportBtn")?.addEventListener("click", showBugReportModal);
   document.querySelector("#memoryBtn")?.addEventListener("click", showMemoryModal);
+  document.querySelector("#myDataBtn")?.addEventListener("click", showMyDataModal);
   els.newChat.addEventListener("click", () => {
     state.docAutoOpenSuppressedThreadId = "";
     createThread();
@@ -567,6 +568,140 @@ async function showMemoryModal() {
       saveBtn.textContent = "保存";
     }
   });
+}
+
+async function showMyDataModal() {
+  document.querySelector(".my-data-modal")?.remove();
+  const modal = document.createElement("div");
+  modal.className = "my-data-modal";
+  modal.innerHTML = `
+    <div class="my-data-backdrop"></div>
+    <div class="my-data-card">
+      <h3>我的数据</h3>
+      <div class="my-data-info" id="myDataInfo">
+        <div class="my-data-loading">加载中...</div>
+      </div>
+      <div class="my-data-actions">
+        <button class="my-data-export-btn" title="下载包含所有数据的 JSON 文件">📥 导出全部数据 (JSON)</button>
+      </div>
+      <div class="my-data-danger-zone">
+        <div class="my-data-danger-title">危险操作</div>
+        <button class="my-data-delete-btn">🗑 彻底删除我的账号和所有数据</button>
+        <p class="my-data-danger-note">⚠ 不可恢复 —— 包括所有对话、文档、记忆和反馈</p>
+      </div>
+      <div class="my-data-footer">
+        <button class="my-data-close-btn">关闭</button>
+      </div>
+      <div class="my-data-msg" id="myDataMsg"></div>
+    </div>`;
+  document.body.append(modal);
+
+  const infoDiv = modal.querySelector("#myDataInfo");
+  const msg = modal.querySelector("#myDataMsg");
+  let userEmail = "";
+
+  try {
+    const resp = await fetch("/api/me/summary");
+    if (resp.ok) {
+      const d = await resp.json();
+      userEmail = d.email || "";
+      const regDate = d.created_at ? new Date(d.created_at).toLocaleDateString("zh-CN") : "未知";
+      infoDiv.innerHTML = `
+        <div class="my-data-row"><span>邮箱</span><strong>${escapeHtml(d.email || "")}</strong></div>
+        <div class="my-data-row"><span>注册于</span><strong>${regDate}</strong></div>
+        <div class="my-data-divider"></div>
+        <div class="my-data-stats-title">数据概览</div>
+        <div class="my-data-stats">
+          <div class="my-data-stat"><span class="my-data-stat-num">${d.threads}</span><span>对话</span></div>
+          <div class="my-data-stat"><span class="my-data-stat-num">${d.messages}</span><span>消息</span></div>
+          <div class="my-data-stat"><span class="my-data-stat-num">${d.documents}</span><span>文档</span></div>
+          <div class="my-data-stat"><span class="my-data-stat-num">${d.memory_chars}</span><span>记忆字符</span></div>
+          <div class="my-data-stat"><span class="my-data-stat-num">${d.telemetry}</span><span>遥测记录</span></div>
+        </div>`;
+    } else {
+      infoDiv.innerHTML = `<div class="my-data-loading">加载失败</div>`;
+    }
+  } catch {
+    infoDiv.innerHTML = `<div class="my-data-loading">加载失败</div>`;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  modal.querySelector(".my-data-close-btn").addEventListener("click", () => modal.remove());
+  modal.querySelector(".my-data-backdrop").addEventListener("click", () => modal.remove());
+
+  modal.querySelector(".my-data-export-btn").addEventListener("click", () => {
+    const a = document.createElement("a");
+    a.href = "/api/me/export";
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+
+  modal.querySelector(".my-data-delete-btn").addEventListener("click", async () => {
+    // Step 1: confirm by typing email
+    const entered = await showPromptModal(`确认删除：请输入你的邮箱地址以继续（${userEmail}）`);
+    if (entered === null) return;
+    if (entered.trim() !== userEmail) {
+      msg.textContent = "邮箱不匹配，操作已取消";
+      msg.style.color = "var(--accent)";
+      return;
+    }
+
+    // Step 2: 5-second countdown
+    const deleteBtn = modal.querySelector(".my-data-delete-btn");
+    deleteBtn.disabled = true;
+    let countdown = 5;
+    deleteBtn.textContent = `确认删除（${countdown}s 后可点击）`;
+    const timer = setInterval(() => {
+      countdown--;
+      if (countdown <= 0) {
+        clearInterval(timer);
+        deleteBtn.textContent = "⚠ 立即永久删除账号";
+        deleteBtn.disabled = false;
+        deleteBtn.classList.add("my-data-delete-ready");
+        deleteBtn.addEventListener("click", doDelete, { once: true });
+      } else {
+        deleteBtn.textContent = `确认删除（${countdown}s 后可点击）`;
+      }
+    }, 1000);
+  });
+
+  async function doDelete() {
+    const deleteBtn = modal.querySelector(".my-data-delete-btn");
+    deleteBtn.disabled = true;
+    deleteBtn.textContent = "删除中...";
+    try {
+      const resp = await fetch("/api/me", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: "DELETE_ALL_MY_DATA" }),
+      });
+      if (resp.ok || resp.status === 204) {
+        modal.remove();
+        state.authenticated = false;
+        state.threads = [];
+        state.activeId = "";
+        state.activeDocId = "";
+        try { localStorage.removeItem(THREADS_KEY); } catch {}
+        showLogin();
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        msg.textContent = data.error || "删除失败，请重试";
+        msg.style.color = "var(--accent)";
+        deleteBtn.disabled = false;
+        deleteBtn.textContent = "🗑 彻底删除我的账号和所有数据";
+      }
+    } catch (e) {
+      msg.textContent = String(e.message);
+      msg.style.color = "var(--accent)";
+      deleteBtn.disabled = false;
+      deleteBtn.textContent = "🗑 彻底删除我的账号和所有数据";
+    }
+  }
 }
 
 async function logout() {
