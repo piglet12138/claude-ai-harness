@@ -136,8 +136,7 @@ function wireEvents() {
   document.querySelector("#switchToLogin")?.addEventListener("click", (e) => { e.preventDefault(); showLoginForm(); });
   els.logout.addEventListener("click", logout);
   document.querySelector("#bugReportBtn")?.addEventListener("click", showBugReportModal);
-  document.querySelector("#memoryBtn")?.addEventListener("click", showMemoryModal);
-  document.querySelector("#myDataBtn")?.addEventListener("click", showMyDataModal);
+  document.querySelector("#settingsBtn")?.addEventListener("click", () => showSettingsModal());
   els.newChat.addEventListener("click", () => {
     state.docAutoOpenSuppressedThreadId = "";
     createThread();
@@ -702,6 +701,254 @@ async function showMyDataModal() {
       deleteBtn.textContent = "🗑 彻底删除我的账号和所有数据";
     }
   }
+}
+
+async function showSettingsModal(defaultTab = "memory") {
+  document.querySelector(".settings-modal")?.remove();
+  const modal = document.createElement("div");
+  modal.className = "settings-modal";
+  modal.innerHTML = `
+    <div class="settings-backdrop"></div>
+    <div class="settings-card">
+      <div class="settings-header">
+        <h3>设置</h3>
+        <button class="settings-close-btn" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="settings-tabs" role="tablist">
+        <button class="settings-tab" data-tab="memory" role="tab">长期记忆</button>
+        <button class="settings-tab" data-tab="mydata" role="tab">我的数据</button>
+        <button class="settings-tab" data-tab="about" role="tab">关于</button>
+      </div>
+      <div class="settings-content" id="settingsContent"></div>
+    </div>`;
+  document.body.append(modal);
+
+  const content = modal.querySelector("#settingsContent");
+  const tabs = modal.querySelectorAll(".settings-tab");
+
+  async function switchTab(tabName) {
+    tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === tabName));
+    content.innerHTML = "";
+    if (tabName === "memory") await renderMemoryTabContent(content);
+    else if (tabName === "mydata") await renderMyDataTabContent(content);
+    else renderAboutTabContent(content);
+  }
+
+  tabs.forEach(tab => tab.addEventListener("click", () => switchTab(tab.dataset.tab)));
+
+  function closeModal() { modal.remove(); document.removeEventListener("keydown", onKeyDown); }
+  function onKeyDown(e) { if (e.key === "Escape") closeModal(); }
+  modal.querySelector(".settings-close-btn").addEventListener("click", closeModal);
+  modal.querySelector(".settings-backdrop").addEventListener("click", closeModal);
+  document.addEventListener("keydown", onKeyDown);
+
+  await switchTab(defaultTab);
+}
+
+async function renderMemoryTabContent(container) {
+  container.innerHTML = `
+    <p class="settings-tab-desc">模型会主动记住你的身份 / 偏好 / 项目，跨对话沿用。你可以在这里查看、编辑或清空。</p>
+    <textarea id="settingsMemoryText" rows="8" placeholder="暂无记忆内容..."></textarea>
+    <div class="memory-char-count" id="settingsMemoryCharCount">0 行 / 0 字符（上限 4000）</div>
+    <div class="memory-modal-actions">
+      <button class="memory-clear-btn">清空全部</button>
+      <button class="memory-cancel-btn settings-close-trigger">关闭</button>
+      <button class="memory-save-btn">保存</button>
+    </div>
+    <div class="memory-msg" id="settingsMemoryMsg"></div>`;
+
+  const textarea = container.querySelector("#settingsMemoryText");
+  const charCount = container.querySelector("#settingsMemoryCharCount");
+  const saveBtn = container.querySelector(".memory-save-btn");
+  const msg = container.querySelector("#settingsMemoryMsg");
+
+  function updateCount() {
+    const len = textarea.value.length;
+    const lines = textarea.value ? textarea.value.split("\n").length : 0;
+    charCount.textContent = `${lines} 行 / ${len} 字符（上限 4000）`;
+    charCount.classList.toggle("over-limit", len > 4000);
+    saveBtn.disabled = len > 4000;
+  }
+
+  try {
+    const resp = await fetch("/api/memory");
+    if (resp.ok) { const data = await resp.json(); textarea.value = data.content || ""; updateCount(); }
+  } catch {}
+
+  textarea.addEventListener("input", updateCount);
+
+  container.querySelector(".settings-close-trigger").addEventListener("click", () => {
+    document.querySelector(".settings-modal")?.remove();
+  });
+
+  container.querySelector(".memory-clear-btn").addEventListener("click", async () => {
+    if (!await showConfirmModal("确定清空全部长期记忆？清空后无法恢复。", { danger: true })) return;
+    try {
+      const resp = await fetch("/api/memory", { method: "DELETE" });
+      if (!resp.ok) throw new Error((await resp.json()).error || "清空失败");
+      textarea.value = "";
+      updateCount();
+      msg.textContent = "已清空";
+      msg.style.color = "#4d9950";
+    } catch (e) {
+      msg.textContent = String(e.message);
+      msg.style.color = "var(--accent)";
+    }
+  });
+
+  saveBtn.addEventListener("click", async () => {
+    const memContent = textarea.value;
+    if (memContent.length > 4000) return;
+    saveBtn.disabled = true;
+    saveBtn.textContent = "保存中...";
+    try {
+      const resp = await fetch("/api/memory", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: memContent }),
+      });
+      if (!resp.ok) throw new Error((await resp.json()).error || "保存失败");
+      msg.textContent = "已保存";
+      msg.style.color = "#4d9950";
+    } catch (e) {
+      msg.textContent = String(e.message);
+      msg.style.color = "var(--accent)";
+      saveBtn.disabled = false;
+      saveBtn.textContent = "保存";
+    }
+  });
+}
+
+async function renderMyDataTabContent(container) {
+  container.innerHTML = `
+    <div class="my-data-info" id="settingsMyDataInfo">
+      <div class="my-data-loading">加载中...</div>
+    </div>
+    <div class="my-data-actions">
+      <button class="my-data-export-btn" title="下载包含所有数据的 JSON 文件">📥 导出全部数据 (JSON)</button>
+    </div>
+    <div class="my-data-danger-zone">
+      <div class="my-data-danger-title">危险操作</div>
+      <button class="my-data-delete-btn">🗑 彻底删除我的账号和所有数据</button>
+      <p class="my-data-danger-note">⚠ 不可恢复 —— 包括所有对话、文档、记忆和反馈</p>
+    </div>
+    <div class="my-data-footer">
+      <button class="my-data-close-btn settings-close-trigger">关闭</button>
+    </div>
+    <div class="my-data-msg" id="settingsMyDataMsg"></div>`;
+
+  const infoDiv = container.querySelector("#settingsMyDataInfo");
+  const msg = container.querySelector("#settingsMyDataMsg");
+  let userEmail = "";
+
+  try {
+    const resp = await fetch("/api/me/summary");
+    if (resp.ok) {
+      const d = await resp.json();
+      userEmail = d.email || "";
+      const regDate = d.created_at ? new Date(d.created_at).toLocaleDateString("zh-CN") : "未知";
+      infoDiv.innerHTML = `
+        <div class="my-data-row"><span>邮箱</span><strong>${escapeHtml(d.email || "")}</strong></div>
+        <div class="my-data-row"><span>注册于</span><strong>${regDate}</strong></div>
+        <div class="my-data-divider"></div>
+        <div class="my-data-stats-title">数据概览</div>
+        <div class="my-data-stats">
+          <div class="my-data-stat"><span class="my-data-stat-num">${d.threads}</span><span>对话</span></div>
+          <div class="my-data-stat"><span class="my-data-stat-num">${d.messages}</span><span>消息</span></div>
+          <div class="my-data-stat"><span class="my-data-stat-num">${d.documents}</span><span>文档</span></div>
+          <div class="my-data-stat"><span class="my-data-stat-num">${d.memory_chars}</span><span>记忆字符</span></div>
+          <div class="my-data-stat"><span class="my-data-stat-num">${d.telemetry}</span><span>遥测记录</span></div>
+        </div>`;
+    } else {
+      infoDiv.innerHTML = `<div class="my-data-loading">加载失败</div>`;
+    }
+  } catch {
+    infoDiv.innerHTML = `<div class="my-data-loading">加载失败</div>`;
+  }
+
+  container.querySelector(".settings-close-trigger").addEventListener("click", () => {
+    document.querySelector(".settings-modal")?.remove();
+  });
+
+  container.querySelector(".my-data-export-btn").addEventListener("click", () => {
+    const a = document.createElement("a");
+    a.href = "/api/me/export";
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+
+  container.querySelector(".my-data-delete-btn").addEventListener("click", async () => {
+    const entered = await showPromptModal(`确认删除：请输入你的邮箱地址以继续（${userEmail}）`);
+    if (entered === null) return;
+    if (entered.trim() !== userEmail) {
+      msg.textContent = "邮箱不匹配，操作已取消";
+      msg.style.color = "var(--accent)";
+      return;
+    }
+    const deleteBtn = container.querySelector(".my-data-delete-btn");
+    deleteBtn.disabled = true;
+    let countdown = 5;
+    deleteBtn.textContent = `确认删除（${countdown}s 后可点击）`;
+    const timer = setInterval(() => {
+      countdown--;
+      if (countdown <= 0) {
+        clearInterval(timer);
+        deleteBtn.textContent = "⚠ 立即永久删除账号";
+        deleteBtn.disabled = false;
+        deleteBtn.classList.add("my-data-delete-ready");
+        deleteBtn.addEventListener("click", doDelete, { once: true });
+      } else {
+        deleteBtn.textContent = `确认删除（${countdown}s 后可点击）`;
+      }
+    }, 1000);
+  });
+
+  async function doDelete() {
+    const deleteBtn = container.querySelector(".my-data-delete-btn");
+    deleteBtn.disabled = true;
+    deleteBtn.textContent = "删除中...";
+    try {
+      const resp = await fetch("/api/me", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: "DELETE_ALL_MY_DATA" }),
+      });
+      if (resp.ok || resp.status === 204) {
+        document.querySelector(".settings-modal")?.remove();
+        state.authenticated = false;
+        state.threads = [];
+        state.activeId = "";
+        state.activeDocId = "";
+        try { localStorage.removeItem(THREADS_KEY); } catch {}
+        showLogin();
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        msg.textContent = data.error || "删除失败，请重试";
+        msg.style.color = "var(--accent)";
+        deleteBtn.disabled = false;
+        deleteBtn.textContent = "🗑 彻底删除我的账号和所有数据";
+      }
+    } catch (e) {
+      msg.textContent = String(e.message);
+      msg.style.color = "var(--accent)";
+      deleteBtn.disabled = false;
+      deleteBtn.textContent = "🗑 彻底删除我的账号和所有数据";
+    }
+  }
+}
+
+function renderAboutTabContent(container) {
+  container.innerHTML = `
+    <div class="about-tab-content">
+      <div class="about-links">
+        <a href="/privacy.html" target="_blank" rel="noopener">🔒 隐私政策</a>
+        <a href="/whatsnew.html" target="_blank" rel="noopener">✨ 更新日志</a>
+        <a href="https://github.com/piglet12138/claude-ai-harness" target="_blank" rel="noopener">🐙 GitHub</a>
+      </div>
+      <div class="about-version">当前版本：20260523</div>
+    </div>`;
 }
 
 async function logout() {
