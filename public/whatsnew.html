@@ -244,6 +244,45 @@
       <div class="timeline">
 
         <div class="entry highlight">
+          <div class="entry-date">2026-05-23</div>
+          <div class="entry-title">
+            <span class="tag tag-feat">feat</span>
+            <span class="zh">跨对话长期记忆</span>
+            <span class="en">Cross-conversation long-term memory</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">新增 <code>manage_memory</code> 工具 + <code>user_memory</code> 表。告诉模型一次你的身份 / 项目 / 长期偏好（"我是软件工程师"、"请用中文"），新开任意对话都能延续 —— 不再每次重新自我介绍。模型自主决定记什么（read / append / replace 三种 action），不记录一次性问题或敏感信息。</span>
+            <span class="en">New <code>manage_memory</code> tool + <code>user_memory</code> table. Tell the model once about your identity / project / persistent preferences ("I'm a software engineer", "reply in Chinese"), and every new conversation picks up where the last left off. The model decides autonomously what's worth remembering (read / append / replace actions); one-off questions and sensitive info are excluded by design.</span>
+          </div>
+        </div>
+
+        <div class="entry highlight">
+          <div class="entry-date">2026-05-23</div>
+          <div class="entry-title">
+            <span class="tag tag-perf">perf</span>
+            <span class="zh">启用 Prompt Caching，input 等效成本砍 ~50%、TTFT 显著下降</span>
+            <span class="en">Prompt caching enabled — ~50% effective input cost reduction, faster TTFT</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">system prompt 和工具定义走 Anthropic 的 ephemeral cache，多轮对话里这部分基本只付一次"创建"成本，后续按 10% 成本读取。telemetry 新增 <code>cache_creation_tokens</code> / <code>cache_read_tokens</code> 两列可在管理后台追踪命中率。实测 8 轮新加坡新闻对话中 cache_read 累计 100K+ tokens，input 端等效成本约下降一半。</span>
+            <span class="en">System prompt and tool definitions now ride Anthropic's ephemeral cache — paid once per ~5 min window, replayed at 10% of normal input cost. Telemetry exposes <code>cache_creation_tokens</code> / <code>cache_read_tokens</code> in the admin panel for hit-rate tracking. Measured on an 8-turn session: ~100K cached tokens replayed, effective input cost roughly halved.</span>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">2026-05-23</div>
+          <div class="entry-title">
+            <span class="tag tag-perf">perf</span>
+            <span class="zh">主动上下文压缩 + Haiku 摘要长 tool_result</span>
+            <span class="en">Proactive context compression + Haiku-summarized tool results</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">长对话场景的压缩链路：超过预算阈值后用 Haiku 把过长的 tool_result（搜索全文等）摘成 1-2 句，按 content hash 缓存复用；早期工具轮整体摘要化；最后还有硬上限兜底。主对话仍走配置的好模型（默认 claude-opus-4-7），Haiku 只跑后台辅助任务 —— 不牺牲主回答质量。配套 telemetry 新增 <code>compressed_from/to_tokens</code> 和 <code>haiku_calls</code> 字段。</span>
+            <span class="en">Long-conversation compression pipeline: above a token budget, oversized tool_results (search dumps, etc.) get Haiku-summarized to 1-2 sentences and cached by content hash; early tool rounds collapse to summaries; a hard cap is the last-line backstop. The main chat path still uses the configured strong model (default claude-opus-4-7), with Haiku only running offstage helper tasks — no quality trade-off on user-facing answers. Telemetry gains <code>compressed_from/to_tokens</code> and <code>haiku_calls</code> fields.</span>
+          </div>
+        </div>
+
+        <div class="entry highlight">
           <div class="entry-date">2026-05-22</div>
           <div class="entry-title">
             <span class="tag tag-feat">feat</span>

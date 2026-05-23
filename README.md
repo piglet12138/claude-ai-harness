@@ -253,6 +253,38 @@ ssh server 'cd /path/to/app && npm install && pip install openpyxl reportlab pyp
 
 ## 更新日志
 
+### 2026-05-23 — 跨对话长期记忆 & Prompt Caching & 主动压缩
+
+**跨对话长期记忆（新增）：**
+- 新增 `user_memory(user_id, content, updated_at)` 表，一行一用户、4000 字符上限
+- 新增工具 `manage_memory(action, content)`，action ∈ `read | append | replace`，模型自主决定记什么
+- system prompt 注入 `[长期记忆]: ...`，新开对话即可看到既有事实
+- 设计明确边界：记身份 / 职业 / 项目 / 长期偏好；不记一次性问题 / 临时上下文 / 敏感信息
+
+**Prompt Caching（启用）：**
+- system prompt 改成 `[{ type: "text", text, cache_control: { type: "ephemeral" } }]` 数组形式
+- 工具数组最后一项加 `cache_control` —— 覆盖前面所有 system + tools 一次缓存
+- 请求 header 加 `anthropic-beta: prompt-caching-2024-07-31`，主调用路径 + 400 retry 路径均带
+- telemetry 表新增 `cache_creation_tokens` / `cache_read_tokens` 两列，可在管理后台查命中
+- 实测 8 轮新加坡新闻对话：100K+ tokens 走 cache_read（10% 成本），input 等效成本约下降 50%
+
+**主动上下文压缩 + Haiku 摘要（新增）：**
+- 新增 `proactiveCompress()` 管线：超 `PROACTIVE_TOKEN_BUDGET=30000` 后用 Haiku 摘要长 tool_result，按 content hash 缓存到 `tool_result_summary` 表复用
+- 早期工具轮整体摘要化（drop tool_use blocks，保留 1-2 句概述）
+- 兜底 `HARD_CAP=100000`，最坏情况下从尾部按预算截取
+- 顺序：收前端 messages → 智能压缩 → 兜底硬截
+- **模型路由原则**（写进设计，覆盖未来所有内部任务）：主对话永远走配置的好模型（默认 `claude-opus-4-7`），压缩 / 摘要 / 提取等内部 ROI 不高任务走 Haiku，优化速度但不牺牲主回答质量
+- telemetry 表新增 `compressed_from_tokens` / `compressed_to_tokens` / `haiku_calls` / `haiku_input_tokens` / `haiku_output_tokens`
+
+**修复（同日）：**
+- `proactiveCompress` 一度因 `takeByBudget` 在前置 chat handler 里先把 messages 硬截到预算的 80%，导致后续阈值检查永远不满足、压缩死代码。修复后顺序调整为 `messages.slice(-100) → 智能压缩 → 兜底硬截`，并把阈值 / 上限提到文件顶部常量便于调参
+
+**Dogfooding 流程验证（续）：**
+- 今天又通过 `@claude` 跑了 4 个 issue（#39 / #41 / #43 / #45）—— 加上前一批 5 个，单日累计 9 个 issue 全部经 agent → CI → 合 dev → 本地 :3141 QA → ff-merge dev → main → auto-deploy 完成
+- 期间 deploy.yml 遇到一次 DO ↔ github.com 瞬时网络超时（134s 连不上），workflow rerun 即恢复 —— 暴露了"网络抖动需要人工介入 rerun"这个小坑
+
+---
+
 ### 2026-05-22 — Artifact 体验全链路打磨 & 反馈带对话 ID
 
 **Bug 反馈带上当前对话 ID（新增）：**
