@@ -141,6 +141,20 @@ db.exec(`
     content TEXT NOT NULL DEFAULT '',
     updated_at TEXT DEFAULT (datetime('now', '+8 hours'))
   );
+
+  CREATE TABLE IF NOT EXISTS shares (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT,
+    payload TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    revoked_at INTEGER,
+    view_count INTEGER DEFAULT 0,
+    fork_count INTEGER DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_shares_user ON shares(user_id, created_at DESC);
 `);
 
 // Migrations for existing databases
@@ -232,6 +246,15 @@ const stmts = {
   getUserTelemetryCount: db.prepare("SELECT COUNT(*) as count FROM telemetry WHERE user_id = ?"),
   listUserThreadsFull: db.prepare("SELECT id, title, archived, starred, created_at, updated_at FROM threads WHERE user_id = ? ORDER BY updated_at DESC"),
   getUserRatings: db.prepare("SELECT r.message_id, r.thread_id, r.rating, r.created_at FROM ratings r WHERE r.user_id = ?"),
+
+  // Shares
+  insertShare: db.prepare("INSERT INTO shares (id, kind, user_id, title, payload, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
+  getShare: db.prepare("SELECT * FROM shares WHERE id = ?"),
+  listSharesByUser: db.prepare("SELECT id, kind, title, created_at, expires_at, revoked_at, view_count, fork_count FROM shares WHERE user_id = ? ORDER BY created_at DESC"),
+  revokeShare: db.prepare("UPDATE shares SET revoked_at = ? WHERE id = ? AND user_id = ?"),
+  incrementShareView: db.prepare("UPDATE shares SET view_count = view_count + 1 WHERE id = ?"),
+  incrementShareFork: db.prepare("UPDATE shares SET fork_count = fork_count + 1 WHERE id = ?"),
+  cleanExpiredShares: db.prepare("DELETE FROM shares WHERE expires_at < ? AND revoked_at IS NULL"),
 
   // Tool result summary cache
   getToolResultSummary: db.prepare("SELECT summary FROM tool_result_summary WHERE content_hash = ?"),
@@ -454,7 +477,23 @@ export const dbBulkImport = db.transaction((userId, threads) => {
   }
 });
 
+export const dbShares = {
+  create(id, kind, userId, title, payload, expiresAt) {
+    stmts.insertShare.run(id, kind, userId, title, JSON.stringify(payload), Date.now(), expiresAt);
+  },
+  get(id) {
+    const row = stmts.getShare.get(id);
+    if (!row) return null;
+    return { ...row, payload: JSON.parse(row.payload) };
+  },
+  listByUser(userId) { return stmts.listSharesByUser.all(userId); },
+  revoke(id, userId) { stmts.revokeShare.run(Date.now(), id, userId); },
+  incrementView(id) { stmts.incrementShareView.run(id); },
+  incrementFork(id) { stmts.incrementShareFork.run(id); },
+  cleanup() { stmts.cleanExpiredShares.run(Date.now()); },
+};
+
 // Cleanup expired sessions every hour
-setInterval(() => dbSessions.cleanup(), 3600_000);
+setInterval(() => { dbSessions.cleanup(); dbShares.cleanup(); }, 3600_000);
 
 export default db;
