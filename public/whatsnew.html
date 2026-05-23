@@ -247,6 +247,46 @@
           <div class="entry-date">2026-05-23</div>
           <div class="entry-title">
             <span class="tag tag-feat">feat</span>
+            <span class="zh">设置统一入口 + 左栏布局优化</span>
+            <span class="en">Unified settings entry + sidebar layout fix</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">左栏底部新增「设置」入口，把"长期记忆 / 我的数据 / 关于"合并成带 tab 的设置模态 —— 顶栏不再被账户级按钮挤占。同时修了左栏的老问题：「最近」对话多到一定数量就把「收藏」和「文档」挤到看不见 —— 现在三段各自有滚动边界，收藏和文档永远可见。</span>
+            <span class="en">A new "Settings" entry now lives at the bottom of the left sidebar, consolidating "Memory / My Data / About" into a tabbed modal — the top bar is no longer crowded with account-level buttons. We also fixed a long-standing sidebar layout bug: when "Recent" filled up, "Starred" and "Documents" got pushed off-screen. Each section now has its own scroll boundary and stays visible.</span>
+          </div>
+        </div>
+
+        <div class="entry highlight">
+          <div class="entry-date">2026-05-23</div>
+          <div class="entry-title">
+            <span class="tag tag-feat">feat</span>
+            <span class="zh">隐私三件套 — 记忆 UI + 数据导出 + 一键彻底删除</span>
+            <span class="en">Privacy triad — Memory UI + data export + one-click full deletion</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">围绕"数据主体权利"补齐三件事：
+              <ul>
+                <li><strong>长期记忆 UI</strong>：模型主动记下的事实现在能看 / 改 / 单条删除 / 清空全部</li>
+                <li><strong>导出我的数据</strong>：一个 JSON 包含全部对话 / 消息 / 文档 / 记忆 / 遥测 / 反馈</li>
+                <li><strong>彻底删除账号</strong>：两步确认（输邮箱 + 5s 倒计时），DB 里 threads / messages / documents / telemetry / user_memory / bug-reports 与 bug-images 全部级联清理</li>
+                <li><strong>privacy.html 透明化</strong>：明确列出收集了什么字段、admin 可见范围、对应每条权利的操作入口</li>
+              </ul>
+              对应 GDPR/PIPL 的数据可携权 + 被遗忘权基本款。</span>
+            <span class="en">Closing the loop on data-subject rights:
+              <ul>
+                <li><strong>Memory UI</strong>: see, edit, delete individual entries, or wipe all of what the model has remembered about you</li>
+                <li><strong>Export my data</strong>: one JSON containing all your threads / messages / documents / memory / telemetry / feedback</li>
+                <li><strong>Full account deletion</strong>: two-step confirmation (type your email + 5s countdown), then cascading cleanup of every table plus bug-report files referencing your email</li>
+                <li><strong>Transparent privacy.html</strong>: explicit field-level list of what's collected, admin visibility scope, and direct links to each rights-fulfillment entry</li>
+              </ul>
+              Covers the baseline GDPR/PIPL portability + erasure rights.</span>
+          </div>
+        </div>
+
+        <div class="entry highlight">
+          <div class="entry-date">2026-05-23</div>
+          <div class="entry-title">
+            <span class="tag tag-feat">feat</span>
             <span class="zh">跨对话长期记忆</span>
             <span class="en">Cross-conversation long-term memory</span>
           </div>

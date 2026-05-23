@@ -253,6 +253,40 @@ ssh server 'cd /path/to/app && npm install && pip install openpyxl reportlab pyp
 
 ## 更新日志
 
+### 2026-05-23（下半场）— 隐私三件套 & 设置统一入口 & 左栏布局优化
+
+**设置统一入口 + 左栏布局重构：**
+- 左栏底部新增"设置"入口（齿轮 icon），打开带 tab 的设置模态：长期记忆 / 我的数据 / 关于
+- 顶栏移除"记忆"和"我的数据"按钮，腾出空间
+- 三个 tab 都从原有独立 modal 内容平迁过来，功能完全一致
+- **左栏布局重构**：用 flex column + 各段独立滚动边界，解决"最近"对话太多把"收藏"和"文档"挤到看不见的老问题；新对话按钮和设置按钮固定在顶/底
+- 移动端侧栏切换行为保持不变
+
+**长期记忆 UI（新增）：**
+- 新增 `GET / PUT / DELETE /api/memory` 三个端点（认证后只能操作自己的 memory，不接受 user_id 参数避免越权）
+- 前端 textarea 全量编辑 + 实时字符计数（上限 4000）+ 二步确认清空
+- 用户终于能看见 / 改写 / 删除 `manage_memory` 工具帮他记下的事实，解决 #45 "模型主动记我"带来的失控感
+
+**数据导出 + 彻底删除账号（新增）：**
+- 新增 `GET /api/me/export` —— 一个 JSON 包含完整 user/memory/threads/messages/documents/telemetry/feedback/bug_reports，`Content-Disposition: attachment`
+- 新增 `DELETE /api/me` —— body 需带 `confirm: "DELETE_ALL_MY_DATA"` 防误删；级联清理 user_memory + threads + messages + documents + ratings + telemetry + bug-reports.json 匹配条目 + bug-images/ 引用的图片文件 + users 表行，最后失效 session
+- 前端"我的数据"页：邮箱 / 注册时间 / 5 项数据统计 + 导出按钮 + 红色危险操作区（两步确认：输入邮箱 + 5 秒倒计时）
+- 删除后用同邮箱重新注册看不到任何旧数据
+
+**privacy.html 透明化（更新）：**
+- 中英文 privacy 页都加三节：
+  1. **我们收集什么**：列到表/字段层级（含 telemetry.message_preview ~100 字、user_memory 内容、bug-images 截图）
+  2. **你的权利**：明确指向每条权利对应的产品入口（设置 → 长期记忆 / 我的数据 → 导出 / 删除）
+  3. **管理员可见范围**：诚实说明 admin 能看所有对话和 bug 反馈，以及为什么（debug / 滥用排查）
+- app footer + 用户菜单加显眼链接
+
+**理由：**
+- 数据可携权 (Right to Data Portability) + 被遗忘权 (Right to Erasure) 是 GDPR Art. 17/20 + PIPL 第 47 条的基本款
+- 项目以"学习/研究"为目的，但应该按面对真实用户的标准对待个人数据
+- #45 上线 memory 后没有用户 UI 是最大的不安要素 —— "系统主动记我"比"系统被动存我"敏感得多，本批补齐
+
+---
+
 ### 2026-05-23 — 跨对话长期记忆 & Prompt Caching & 主动压缩
 
 **跨对话长期记忆（新增）：**
