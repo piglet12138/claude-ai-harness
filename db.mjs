@@ -221,6 +221,17 @@ const stmts = {
     AVG(latency_ms) as avg_latency_ms,
     SUM(json_array_length(tool_calls)) as total_tool_calls
     FROM telemetry`),
+  getUserTelemetry: db.prepare("SELECT id, thread_id, tool_calls, input_tokens, output_tokens, latency_ms, message_preview, model, rounds, cache_creation_tokens, cache_read_tokens, created_at FROM telemetry WHERE user_id = ? ORDER BY created_at DESC"),
+  deleteUserTelemetry: db.prepare("DELETE FROM telemetry WHERE user_id = ?"),
+  deleteUserRatings: db.prepare("DELETE FROM ratings WHERE user_id = ?"),
+  deleteUserUsage: db.prepare("DELETE FROM usage WHERE user_id = ?"),
+  getUserMemoryWithMeta: db.prepare("SELECT content, updated_at FROM user_memory WHERE user_id = ?"),
+  getUserThreadCount: db.prepare("SELECT COUNT(*) as count FROM threads WHERE user_id = ?"),
+  getUserMessageCount: db.prepare("SELECT COUNT(*) as count FROM messages m JOIN threads t ON m.thread_id = t.id WHERE t.user_id = ?"),
+  getUserDocumentCount: db.prepare("SELECT COUNT(*) as count FROM documents d JOIN threads t ON d.thread_id = t.id WHERE t.user_id = ?"),
+  getUserTelemetryCount: db.prepare("SELECT COUNT(*) as count FROM telemetry WHERE user_id = ?"),
+  listUserThreadsFull: db.prepare("SELECT id, title, archived, starred, created_at, updated_at FROM threads WHERE user_id = ? ORDER BY updated_at DESC"),
+  getUserRatings: db.prepare("SELECT r.message_id, r.thread_id, r.rating, r.created_at FROM ratings r WHERE r.user_id = ?"),
 
   // Tool result summary cache
   getToolResultSummary: db.prepare("SELECT summary FROM tool_result_summary WHERE content_hash = ?"),
@@ -378,6 +389,7 @@ export const dbRatings = {
 
 export const dbMemory = {
   get(userId) { return stmts.getMemory.get(userId)?.content || ""; },
+  getMeta(userId) { return stmts.getUserMemoryWithMeta.get(userId) || null; },
   append(userId, line) {
     const current = this.get(userId);
     const newContent = current ? current + "\n" + String(line || "").trim() : String(line || "").trim();
@@ -386,6 +398,28 @@ export const dbMemory = {
   replace(userId, content) {
     stmts.upsertMemory.run(userId, String(content || "").slice(0, 4000));
   },
+};
+
+export const dbUserData = {
+  summary(userId) {
+    return {
+      threads: stmts.getUserThreadCount.get(userId)?.count || 0,
+      messages: stmts.getUserMessageCount.get(userId)?.count || 0,
+      documents: stmts.getUserDocumentCount.get(userId)?.count || 0,
+      telemetry: stmts.getUserTelemetryCount.get(userId)?.count || 0,
+    };
+  },
+  getAllThreads(userId) { return stmts.listUserThreadsFull.all(userId); },
+  getTelemetry(userId) {
+    return stmts.getUserTelemetry.all(userId).map(r => ({ ...r, tool_calls: JSON.parse(r.tool_calls || '[]') }));
+  },
+  getRatings(userId) { return stmts.getUserRatings.all(userId); },
+  deleteAll: db.transaction((userId) => {
+    stmts.deleteUserTelemetry.run(userId);
+    stmts.deleteUserRatings.run(userId);
+    stmts.deleteUserUsage.run(userId);
+    stmts.deleteUser.run(userId);
+  }),
 };
 
 // Bulk import (for migration from localStorage)

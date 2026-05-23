@@ -1060,6 +1060,214 @@ img.brand-logo.large {
   text-align: right;
 }
 
+/* ─── My Data Modal ─────────────────────────────────── */
+
+.my-data-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  animation: ctx-in 0.15s ease-out;
+}
+
+.my-data-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.my-data-card {
+  position: relative;
+  width: min(520px, calc(100% - 32px));
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.my-data-card h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.my-data-loading {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+.my-data-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  padding: 4px 0;
+  color: var(--muted);
+}
+
+.my-data-row strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.my-data-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 12px 0;
+}
+
+.my-data-stats-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 10px;
+}
+
+.my-data-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.my-data-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-width: 64px;
+  flex: 1;
+}
+
+.my-data-stat-num {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.2;
+}
+
+.my-data-stat span:last-child {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.my-data-actions {
+  margin-top: 18px;
+}
+
+.my-data-export-btn {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: 13px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.my-data-export-btn:hover {
+  background: var(--bg);
+}
+
+.my-data-danger-zone {
+  margin-top: 18px;
+  border: 1px solid rgba(192, 48, 48, 0.3);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.my-data-danger-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #c03030;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 10px;
+}
+
+.my-data-delete-btn {
+  width: 100%;
+  border: 1px solid rgba(192, 48, 48, 0.5);
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: 13px;
+  background: transparent;
+  color: #c03030;
+  cursor: pointer;
+  text-align: left;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.my-data-delete-btn:hover:not(:disabled) {
+  background: rgba(192, 48, 48, 0.08);
+}
+
+.my-data-delete-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.my-data-delete-btn.my-data-delete-ready {
+  background: #c03030;
+  color: #fff;
+  border-color: #c03030;
+}
+
+.my-data-delete-btn.my-data-delete-ready:hover {
+  background: #a02020;
+}
+
+.my-data-danger-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.my-data-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.my-data-close-btn {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 16px;
+  font-size: 13px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.my-data-close-btn:hover {
+  background: var(--bg);
+}
+
+.my-data-msg {
+  margin-top: 8px;
+  font-size: 12px;
+  min-height: 16px;
+  text-align: right;
+}
+
 [data-theme="dark"] .form-error {
   color: #e06050;
 }

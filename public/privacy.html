@@ -43,6 +43,37 @@
       a {
         color: #93482d;
       }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 14px;
+        margin: 12px 0;
+      }
+      th, td {
+        border: 1px solid var(--line);
+        padding: 8px 12px;
+        text-align: left;
+        color: var(--muted);
+      }
+      th {
+        background: var(--bg);
+        font-weight: 600;
+        color: var(--ink);
+      }
+      .rights-list {
+        list-style: none;
+        padding: 0;
+      }
+      .rights-list li {
+        padding: 6px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .rights-list li:last-child {
+        border-bottom: none;
+      }
+      .rights-list li strong {
+        color: var(--ink);
+      }
       @media (max-width: 760px) {
         main {
           margin: 0;
@@ -57,17 +88,46 @@
   <body>
     <main>
       <h1>Privacy Policy</h1>
-      <p>Last updated: May 11, 2026</p>
+      <p>Last updated: May 23, 2026</p>
       <p style="margin-top:0"><a href="/privacy-zh.html">中文版</a></p>
 
       <p>Claude AI Harness is a personal AI document workspace operated at claude.yaoyuheng2001.me. This policy explains what information is processed when you use the application.</p>
 
-      <h2>Information We Process</h2>
-      <ul>
-        <li>Login information used to access this private application.</li>
-        <li>Messages, prompts, uploaded files, images, and generated documents that you submit to the application.</li>
-        <li>Google OAuth tokens after you authorize Google Docs upload.</li>
+      <h2>What We Collect</h2>
+      <p>The following data is stored on the server when you use this application:</p>
+      <table>
+        <thead>
+          <tr><th>Category</th><th>Data stored</th><th>Table / Storage</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Account</td><td>Email address, hashed password, registration date</td><td><code>users</code></td></tr>
+          <tr><td>Conversations</td><td>All messages you send and Claude's replies (full content)</td><td><code>threads</code>, <code>messages</code></td></tr>
+          <tr><td>Documents</td><td>Generated or uploaded documents and their versions</td><td><code>documents</code></td></tr>
+          <tr><td>Long-term Memory</td><td>Persistent notes the model saves across conversations (you control this)</td><td><code>user_memory</code></td></tr>
+          <tr><td>Telemetry</td><td>Tool calls made, first ~2000 chars of your input (message preview), token counts, response latency, model used</td><td><code>telemetry</code></td></tr>
+          <tr><td>Feedback</td><td>Thumbs-up / thumbs-down ratings on responses</td><td><code>ratings</code></td></tr>
+          <tr><td>Bug Reports</td><td>Text and screenshots you submit via the Bug button; your email is attached to the report</td><td><code>bug-reports.json</code>, <code>bug-images/</code></td></tr>
+        </tbody>
+      </table>
+
+      <h2>Your Rights</h2>
+      <p>You have the following data subject rights, exercisable directly in the application:</p>
+      <ul class="rights-list">
+        <li><strong>View &amp; edit long-term memory</strong> — Click the <em>记忆</em> button in the top bar to read, edit, or clear your persistent memory.</li>
+        <li><strong>Export all your data (data portability)</strong> — Click <em>我的数据</em> in the top bar, then click <em>📥 Export All Data (JSON)</em> to download a complete JSON file containing your account info, all conversations, documents, memory, telemetry, feedback, and bug reports.</li>
+        <li><strong>Delete your account and all data (right to erasure)</strong> — Click <em>我的数据</em> in the top bar, then click <em>🗑 Delete My Account and All Data</em>. You will be asked to confirm by entering your email address, then a 5-second countdown begins before the final deletion. After deletion your account, all conversations, documents, memory, telemetry, ratings, and bug reports are permanently removed.</li>
+        <li><strong>Delete individual conversations</strong> — Click the delete button next to any conversation in the sidebar.</li>
       </ul>
+
+      <h2>What Administrators Can See</h2>
+      <p>The site administrator can view all data in the admin panel (<code>/admin</code>), including:</p>
+      <ul>
+        <li>All user accounts (email, registration date, role)</li>
+        <li>All conversations and messages for all users</li>
+        <li>All bug reports and attached screenshots</li>
+        <li>Aggregated telemetry and feedback data</li>
+      </ul>
+      <p>This admin access exists for the purposes of debugging, abuse investigation, and service improvement. The administrator is the same person as the site operator (yaoyuheng2001.me). Your conversation content is not shared with any third parties beyond what is required to operate the service (e.g., sending your prompts to the Anthropic API to generate responses).</p>
 
       <h2>Google Data</h2>
       <p>When you connect Google, this application requests the Google Drive file scope so it can create Google Docs files from documents you choose to upload. The application uses Google access only to create those files and open the resulting document link. It does not sell Google user data or use it for advertising.</p>
@@ -82,8 +142,7 @@
         <li><strong>Message previews</strong> — a truncated excerpt of your input (up to 2,000 characters) is logged to help diagnose failure patterns. Full conversation history is not recorded in telemetry.</li>
         <li><strong>Feedback signals</strong> — when you click the thumbs-up or thumbs-down button on a response, the feedback type and a short preview of the assistant message are recorded.</li>
       </ul>
-      <p>This data is stored on the server in append-only log files and is used solely for internal service improvement — for example, identifying common failure modes and building evaluation test suites. It is not shared with third parties, not used for advertising, and not sold.</p>
-      <p>You may request deletion of your telemetry and feedback data by contacting the site operator.</p>
+      <p>This data is stored on the server and is used solely for internal service improvement — for example, identifying common failure modes and building evaluation test suites. It is not shared with third parties, not used for advertising, and not sold.</p>
 
       <h2>Third-Party Services</h2>
       <p>The application may send your prompts, uploaded content, and images to the configured AI API provider to generate responses. If web search is enabled, search queries may be sent to the configured search provider.</p>
@@ -92,7 +151,7 @@
       <p>Data is shared only with service providers needed to operate the application, such as the configured AI API provider, Google APIs for Docs upload, and optional search APIs. Data is not sold.</p>
 
       <h2>Contact</h2>
-      <p>For privacy questions or data removal requests, contact the site operator at the domain owner contact for yaoyuheng2001.me.</p>
+      <p>For privacy questions, contact the site operator at the domain owner contact for yaoyuheng2001.me.</p>
 
       <p><a href="/">Back to Claude AI Harness</a></p>
     </main>
