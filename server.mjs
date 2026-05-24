@@ -473,6 +473,7 @@ const mime = {
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".ico": "image/x-icon",
@@ -2852,11 +2853,15 @@ async function staticFile(requestPath, res) {
     const stat = await fs.stat(target);
     if (stat.isDirectory()) return staticFile(path.join(cleanPath, "index.html"), res);
     const ext = path.extname(target);
-    const cacheControl = [".html", ".js", ".css", ".svg"].includes(ext) ? "no-cache" : "public, max-age=3600";
-    res.writeHead(200, {
+    const cacheControl = [".html", ".js", ".css", ".svg", ".webmanifest"].includes(ext) ? "no-cache" : "public, max-age=3600";
+    const headers = {
       "content-type": mime[ext] || "application/octet-stream",
       "cache-control": cacheControl,
-    });
+    };
+    if (cleanPath === "/sw.js") {
+      headers["service-worker-allowed"] = "/";
+    }
+    res.writeHead(200, headers);
     const data = await fs.readFile(target);
     res.end(data);
   } catch {

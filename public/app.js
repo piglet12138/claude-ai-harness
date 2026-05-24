@@ -3998,3 +3998,57 @@ function stripImagePlaceholders(text) {
     .replace(/^\s*\[图片[:：][^\]]+\]\s*$/gim, "")
     .replace(/\n{3,}/g, "\n\n");
 }
+
+// ─── PWA Install Guidance ───────────────────────────────────────────────────
+
+(function initPwaInstall() {
+  const DISMISSED_KEY = "pwa-install-dismissed";
+
+  // Already running as installed PWA — nothing to do
+  if (window.matchMedia("(display-mode: standalone)").matches) return;
+  // Already dismissed
+  if (localStorage.getItem(DISMISSED_KEY)) return;
+
+  function showToast(textHtml, actionBtn) {
+    const toast = document.createElement("div");
+    toast.className = "pwa-toast";
+    toast.innerHTML = `<span class="pwa-toast-text">${textHtml}</span>`;
+    if (actionBtn) toast.appendChild(actionBtn);
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "pwa-toast-close";
+    closeBtn.textContent = "×";
+    closeBtn.setAttribute("aria-label", "关闭");
+    closeBtn.addEventListener("click", () => {
+      localStorage.setItem(DISMISSED_KEY, "1");
+      toast.remove();
+    });
+    toast.appendChild(closeBtn);
+    document.body.appendChild(toast);
+  }
+
+  // iOS Safari — show manual guidance once
+  const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  if (isIos) {
+    showToast('点底部 <strong>分享</strong> 按钮 → <strong>添加到主屏幕</strong>，获得 app 体验');
+    return;
+  }
+
+  // Android Chrome / other — use beforeinstallprompt
+  let deferredPrompt = null;
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    const btn = document.createElement("button");
+    btn.className = "pwa-install-btn";
+    btn.textContent = "安装应用";
+    btn.addEventListener("click", () => {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then(() => {
+        localStorage.setItem(DISMISSED_KEY, "1");
+        btn.closest(".pwa-toast")?.remove();
+        deferredPrompt = null;
+      });
+    });
+    showToast("安装到主屏，获得 app 体验", btn);
+  });
+})();

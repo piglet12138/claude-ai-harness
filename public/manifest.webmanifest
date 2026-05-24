@@ -1,0 +1,20 @@
+{
+  "name": "Claude AI Harness",
+  "short_name": "Claude",
+  "description": "一起写作、学习、编程",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#1a1512",
+  "background_color": "#f4efe7",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "/icons/192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "新对话", "url": "/app?action=new" }
+  ]
+}
