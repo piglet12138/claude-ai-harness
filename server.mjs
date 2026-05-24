@@ -2886,7 +2886,7 @@ function readSession(req) {
   if (!token) return null;
   const session = dbSessions.get(token);
   if (!session) return null;
-  return { userId: session.userId, email: session.email, role: session.role };
+  return { userId: session.user_id, email: session.email, role: session.role };
 }
 
 function isRateLimited(ip) {
