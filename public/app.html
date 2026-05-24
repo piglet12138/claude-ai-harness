@@ -6,6 +6,11 @@
     <meta name="robots" content="noindex, nofollow" />
     <title>Claude AI Harness</title>
     <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/180.png" />
+    <link rel="apple-touch-icon" sizes="167x167" href="/icons/167.png" />
+    <link rel="apple-touch-icon" sizes="152x152" href="/icons/152.png" />
+    <link rel="apple-touch-icon" sizes="120x120" href="/icons/120.png" />
     <link rel="stylesheet" href="/styles.css?v=20260504-oauth-footer" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous" />
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
@@ -169,7 +174,8 @@
       <a href="/privacy.html">Privacy Policy</a>
       <a href="/terms.html">Terms of Service</a>
     </footer>
-    <script src="/app.js?v=20260523-mydata" type="module"></script>
+    <script>navigator.serviceWorker?.register('/sw.js').catch(() => {})</script>
+    <script src="/app.js?v=20260524-pwa" type="module"></script>
     <script>
     (function(){
       if(navigator.doNotTrack==="1")return;
