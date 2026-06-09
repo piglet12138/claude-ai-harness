@@ -70,6 +70,10 @@ const serpApiKey = process.env.SERPAPI_API_KEY || env.SERPAPI_API_KEY || "";
 const searchApiKey = process.env.SEARCHAPI_API_KEY || env.SEARCHAPI_API_KEY || "";
 // Ingestion filter: "relevance" = query-aware Haiku extraction (claude.ai-style), "truncate" = legacy char-slice
 const extractMode = (process.env.EXTRACT_MODE || env.EXTRACT_MODE || "relevance").toLowerCase();
+// claude.ai-style selective retrieval: auto-fetch top-N per search (1 keeps the win, cuts ~2/3 latency vs top-3)
+const autoFetchN = Math.max(0, Number(process.env.AUTO_FETCH_COUNT || env.AUTO_FETCH_COUNT || 1));
+// Skip auto-fetch when inline snippets are already rich (≈ claude.ai inline-content path)
+const inlineRichChars = Math.max(0, Number(process.env.INLINE_RICH_CHARS || env.INLINE_RICH_CHARS || 2600));
 const webSearchEnabled = /^(true|1|yes)$/i.test(process.env.ENABLE_WEB_SEARCH || env.ENABLE_WEB_SEARCH || "false");
 const webSearchCount = Math.max(1, Math.min(5, Number(process.env.WEB_SEARCH_RESULT_COUNT || env.WEB_SEARCH_RESULT_COUNT || 3)));
 const webSearchQueryCount = Math.max(1, Math.min(3, Number(process.env.WEB_SEARCH_QUERY_COUNT || env.WEB_SEARCH_QUERY_COUNT || 2)));
@@ -1945,12 +1949,14 @@ async function executeTool(name, args, res = null, threadId = null, userId = nul
       const results = await multiSearch(query);
       if (!results.length) return { summary: "无结果", content: `No search results found for: ${query}`, sources: [] };
 
-      // Auto-fetch top 2-3 results for full content
+      // Inline-content-first (claude.ai-style): if snippets are already rich, skip fetch;
+      // else selectively retrieve only the top-N (default 1) — fetch+extract is the exception.
       const fetchable = results.filter(r => r.url && r.url.startsWith("http"));
-      const fetchCount = Math.min(3, fetchable.length);
-      const fetchPromises = fetchable.slice(0, fetchCount).map(r =>
-        fetchPageText(r.url, 6000, query).catch(() => "")
-      );
+      const inlineChars = results.reduce((n, r) => n + (r.description?.length || 0), 0);
+      const fetchCount = inlineChars >= inlineRichChars ? 0 : Math.min(autoFetchN, fetchable.length);
+      const fetchPromises = fetchCount
+        ? fetchable.slice(0, fetchCount).map(r => fetchPageText(r.url, 6000, query).catch(() => ""))
+        : [];
       const fullTexts = await Promise.all(fetchPromises);
 
       // Build rich output
@@ -2711,7 +2717,30 @@ async function robustFetchText(url) {
 }
 
 // Fetch a page and (optionally) keep only query-relevant content at ingestion time.
+// Exa /contents with query-biased highlights — provider-side semantic passage selection
+// (verbatim, NO generative synthesis → ~5x faster than summary), ≈ claude.ai inline content.
+async function exaContentsRelevant(url, query) {
+  if (!exaApiKey || !query) return "";
+  try {
+    const c = new AbortController(); const t = setTimeout(() => c.abort(), 15000);
+    const r = await fetch("https://api.exa.ai/contents", {
+      method: "POST",
+      headers: { "x-api-key": exaApiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ urls: [url], highlights: { query, numSentences: 5, highlightsPerUrl: 5 } }),
+      signal: c.signal,
+    });
+    clearTimeout(t); if (!r.ok) return "";
+    const d = await r.json();
+    return (Array.isArray(d?.results?.[0]?.highlights) ? d.results[0].highlights.join("\n… ") : "").trim();
+  } catch { return ""; }
+}
 async function fetchPageText(url, maxLen = 6000, query = "") {
+  // Preferred: Exa /contents query-relevant excerpt (provider-side relevance, no Haiku round-trip)
+  if (query) {
+    const exa = await exaContentsRelevant(url, query);
+    if (exa.length >= 200) return exa.slice(0, maxLen);
+  }
+  // Fallback: robust raw fetch + local Haiku query-extraction
   const text = await robustFetchText(url);
   if (!text) return "";
   return await extractRelevant(text, query, maxLen);
