@@ -64,6 +64,16 @@ const serperApiKey = process.env.SERPER_API_KEY || env.SERPER_API_KEY || "";
 const tavilyApiKey = process.env.TAVILY_API_KEY || env.TAVILY_API_KEY || "";
 const googleCseApiKey = process.env.GOOGLE_CSE_API_KEY || env.GOOGLE_CSE_API_KEY || "";
 const googleCseCx = process.env.GOOGLE_CSE_CX || env.GOOGLE_CSE_CX || "";
+const exaApiKey = process.env.EXA_API_KEY || env.EXA_API_KEY || "";
+const firecrawlApiKey = process.env.FIRECRAWL_API_KEY || env.FIRECRAWL_API_KEY || "";
+const serpApiKey = process.env.SERPAPI_API_KEY || env.SERPAPI_API_KEY || "";
+const searchApiKey = process.env.SEARCHAPI_API_KEY || env.SEARCHAPI_API_KEY || "";
+// Ingestion filter: "relevance" = query-aware Haiku extraction (claude.ai-style), "truncate" = legacy char-slice
+const extractMode = (process.env.EXTRACT_MODE || env.EXTRACT_MODE || "relevance").toLowerCase();
+// claude.ai-style selective retrieval: auto-fetch top-N per search (1 keeps the win, cuts ~2/3 latency vs top-3)
+const autoFetchN = Math.max(0, Number(process.env.AUTO_FETCH_COUNT || env.AUTO_FETCH_COUNT || 1));
+// Skip auto-fetch when inline snippets are already rich (≈ claude.ai inline-content path)
+const inlineRichChars = Math.max(0, Number(process.env.INLINE_RICH_CHARS || env.INLINE_RICH_CHARS || 2600));
 const webSearchEnabled = /^(true|1|yes)$/i.test(process.env.ENABLE_WEB_SEARCH || env.ENABLE_WEB_SEARCH || "false");
 const webSearchCount = Math.max(1, Math.min(5, Number(process.env.WEB_SEARCH_RESULT_COUNT || env.WEB_SEARCH_RESULT_COUNT || 3)));
 const webSearchQueryCount = Math.max(1, Math.min(3, Number(process.env.WEB_SEARCH_QUERY_COUNT || env.WEB_SEARCH_QUERY_COUNT || 2)));
@@ -301,11 +311,12 @@ const anthropicTools = [
   },
   {
     name: "fetch_url",
-    description: "Fetch and extract text content from a URL. Use when you need to read a specific webpage, article, documentation, or any online resource. Returns the main text content.",
+    description: "Fetch and extract text content from a URL. Use when you need to read a specific webpage, article, documentation, or any online resource. Returns the main text content. Pass `goal` to keep only the parts relevant to what you're looking for.",
     input_schema: {
       type: "object",
       properties: {
         url: { type: "string", description: "The URL to fetch" },
+        goal: { type: "string", description: "What you're trying to find on this page (a question or topic). The page is filtered to keep only content relevant to this. Strongly recommended." },
       },
       required: ["url"],
     },
@@ -1495,7 +1506,7 @@ async function chat(req, res) {
   res.flushHeaders?.();
   res.write(": stream\n\n");
 
-  const MAX_ROUNDS = 8;
+  const MAX_ROUNDS = 12;
   const chatStartTime = Date.now();
   const collectedToolCalls = [];
 
@@ -1938,12 +1949,14 @@ async function executeTool(name, args, res = null, threadId = null, userId = nul
       const results = await multiSearch(query);
       if (!results.length) return { summary: "无结果", content: `No search results found for: ${query}`, sources: [] };
 
-      // Auto-fetch top 2-3 results for full content
+      // Inline-content-first (claude.ai-style): if snippets are already rich, skip fetch;
+      // else selectively retrieve only the top-N (default 1) — fetch+extract is the exception.
       const fetchable = results.filter(r => r.url && r.url.startsWith("http"));
-      const fetchCount = Math.min(3, fetchable.length);
-      const fetchPromises = fetchable.slice(0, fetchCount).map(r =>
-        fetchPageText(r.url, 6000).catch(() => "")
-      );
+      const inlineChars = results.reduce((n, r) => n + (r.description?.length || 0), 0);
+      const fetchCount = inlineChars >= inlineRichChars ? 0 : Math.min(autoFetchN, fetchable.length);
+      const fetchPromises = fetchCount
+        ? fetchable.slice(0, fetchCount).map(r => fetchPageText(r.url, 6000, query).catch(() => ""))
+        : [];
       const fullTexts = await Promise.all(fetchPromises);
 
       // Build rich output
@@ -1970,24 +1983,12 @@ async function executeTool(name, args, res = null, threadId = null, userId = nul
     case "fetch_url": {
       const url = String(args?.url || "").trim();
       if (!url) return { summary: "空 URL", content: "No URL provided." };
+      const goal = String(args?.goal || "").trim();
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-        const resp = await fetch(url, {
-          headers: {
-          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
-          "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-        },
-          signal: controller.signal,
-          redirect: "follow",
-        });
-        clearTimeout(timeout);
-        if (!resp.ok) return { summary: `HTTP ${resp.status}`, content: `Failed to fetch: HTTP ${resp.status}` };
-        const html = await resp.text();
-        const text = extractTextFromHtml(html).slice(0, 12000);
-        const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "").trim().slice(0, 100);
-        return { summary: title || url.slice(0, 40), content: `[${title || url}]\n\n${text}` };
+        // Robust chain (plain → Jina → Firecrawl → Exa), then keep only goal-relevant content
+        const text = await fetchPageText(url, 12000, goal);
+        if (!text) return { summary: "抓取失败", content: `Failed to fetch readable content from: ${url}` };
+        return { summary: url.slice(0, 40), content: `[${url}]\n\n${text}` };
       } catch (e) {
         return { summary: "抓取失败", content: `Fetch error: ${e.message}` };
       }
@@ -2210,6 +2211,29 @@ async function summarizeWithHaiku(content, haikuStats) {
   return text;
 }
 
+// Query-aware ingestion filter (claude.ai-style): read full page text, keep ONLY what's
+// relevant to `query`, drop the rest. Replaces blind char-truncation so the answer isn't
+// silently sliced off past char N. Falls back to truncation when disabled / no query / short.
+async function extractRelevant(fullText, query, maxLen = 6000) {
+  const text = String(fullText || "");
+  if (extractMode !== "relevance" || !query || text.length <= 1200) {
+    return text.slice(0, maxLen);
+  }
+  const hash = crypto.createHash("sha256").update("extract:" + query + "\n" + text).digest("hex");
+  const cached = dbToolResultSummary.get(hash);
+  if (cached) return cached;
+  try {
+    const prompt = `你是一个网页信息提取器。下面是一篇网页的正文。请只提取与【问题】相关的事实、数据、原句、结论，原样保留关键细节（数字、日期、名称、引用），删除导航/广告/无关段落。不要复述问题，不要加评论，直接输出提取内容（中文或原文均可）。若整页都与问题无关，输出"（无相关内容）"。\n\n【问题】${query}\n\n【正文】\n${text.slice(0, 24000)}`;
+    const { text: out } = await callHaiku(prompt, 1024);
+    const result = (out || "").trim().slice(0, maxLen) || text.slice(0, maxLen);
+    dbToolResultSummary.set(hash, result);
+    return result;
+  } catch (e) {
+    console.log(`[Extract] Haiku extract failed, truncating: ${e.message}`);
+    return text.slice(0, maxLen);
+  }
+}
+
 // Proactive context compression: L1 Haiku summarize → L2 budgetCompress fallback
 async function proactiveCompress(messages, budget, haikuStats) {
   const fromTokens = estimateTokens(messages);
@@ -2412,54 +2436,174 @@ async function googleCseSearch(query) {
   }
 }
 
+// Exa — neural search, returns query-relevant highlights (already ingestion-filtered)
+async function exaSearch(query) {
+  if (!exaApiKey) return [];
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    const resp = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: { "x-api-key": exaApiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        type: "auto",
+        numResults: 8,
+        contents: { highlights: true },
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) {
+      console.log(`[Exa] Error ${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 100)}`);
+      return [];
+    }
+    const data = await resp.json();
+    const results = (data.results || []).map((item) => ({
+      title: item.title || "",
+      url: item.url || "",
+      // highlights are query-relevant excerpts — far better than a generic snippet
+      description: (Array.isArray(item.highlights) ? item.highlights.join(" … ") : (item.text || "")).slice(0, 800),
+      age: item.publishedDate ? String(item.publishedDate).slice(0, 10) : "",
+    }));
+    console.log(`[Exa] ${results.length} results for: ${query.slice(0, 40)}`);
+    return results;
+  } catch (e) {
+    console.log(`[Exa] Failed: ${e.message}`);
+    return [];
+  }
+}
+
+// Firecrawl — search with built-in scrape (handles JS / anti-bot)
+async function firecrawlSearch(query) {
+  if (!firecrawlApiKey) return [];
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    const resp = await fetch("https://api.firecrawl.dev/v1/search", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${firecrawlApiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query, limit: 8 }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) {
+      console.log(`[Firecrawl] Error ${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 100)}`);
+      return [];
+    }
+    const data = await resp.json();
+    const results = (data.data || []).map((item) => ({
+      title: item.title || "",
+      url: item.url || "",
+      description: (item.description || item.markdown || "").slice(0, 800),
+      age: "",
+    }));
+    console.log(`[Firecrawl] ${results.length} results for: ${query.slice(0, 40)}`);
+    return results;
+  } catch (e) {
+    console.log(`[Firecrawl] Failed: ${e.message}`);
+    return [];
+  }
+}
+
+// SerpAPI — Google SERP (100/mo free)
+async function serpApiSearch(query) {
+  if (!serpApiKey) return [];
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    const hasChinese = /[一-鿿]/.test(query);
+    const url = new URL("https://serpapi.com/search.json");
+    url.searchParams.set("engine", "google");
+    url.searchParams.set("q", query);
+    url.searchParams.set("num", "10");
+    url.searchParams.set("api_key", serpApiKey);
+    if (hasChinese) { url.searchParams.set("gl", "cn"); url.searchParams.set("hl", "zh-cn"); }
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!resp.ok) {
+      console.log(`[SerpAPI] Error ${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 100)}`);
+      return [];
+    }
+    const data = await resp.json();
+    const results = (data.organic_results || []).slice(0, 8).map((item) => ({
+      title: item.title || "",
+      url: item.link || "",
+      description: (item.snippet || "").slice(0, 800),
+      age: item.date || "",
+    }));
+    console.log(`[SerpAPI] ${results.length} results for: ${query.slice(0, 40)}`);
+    return results;
+  } catch (e) {
+    console.log(`[SerpAPI] Failed: ${e.message}`);
+    return [];
+  }
+}
+
+// searchapi.io — Google SERP (100/mo free)
+async function searchApiSearch(query) {
+  if (!searchApiKey) return [];
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    const hasChinese = /[一-鿿]/.test(query);
+    const url = new URL("https://www.searchapi.io/api/v1/search");
+    url.searchParams.set("engine", "google");
+    url.searchParams.set("q", query);
+    if (hasChinese) { url.searchParams.set("gl", "cn"); url.searchParams.set("hl", "zh-cn"); }
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${searchApiKey}` },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) {
+      console.log(`[SearchApi] Error ${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 100)}`);
+      return [];
+    }
+    const data = await resp.json();
+    const results = (data.organic_results || []).slice(0, 8).map((item) => ({
+      title: item.title || "",
+      url: item.link || "",
+      description: (item.snippet || "").slice(0, 800),
+      age: item.date || "",
+    }));
+    console.log(`[SearchApi] ${results.length} results for: ${query.slice(0, 40)}`);
+    return results;
+  } catch (e) {
+    console.log(`[SearchApi] Failed: ${e.message}`);
+    return [];
+  }
+}
+
 // Smart multi-engine search with fallback chain
 async function multiSearch(query) {
   const q = String(query || "").trim().slice(0, 300);
   if (!q) return [];
 
-  // Try engines in priority order, stop when we have enough results
+  // Fallback chain: Brave primary (user's monthly free quota), then free-quota-first.
+  // Each tier only fires if we still have < 3 results, so quota burn stays minimal.
+  // [engineName, gateKey, fn] — order = priority. Monthly-free tiers ranked above credit-based.
+  const chain = [
+    ["Brave", braveApiKey, braveSearch],        // primary — user choice, monthly free
+    ["SerpAPI", serpApiKey, serpApiSearch],     // 100/mo free, Google SERP
+    ["SearchApi", searchApiKey, searchApiSearch], // 100/mo free, Google SERP
+    ["Exa", exaApiKey, exaSearch],              // neural + query-relevant highlights
+    ["Serper", serperApiKey, serperSearch],     // one-time free credits
+    ["Tavily", tavilyApiKey, tavilySearch],     // credits
+    ["GoogleCSE", googleCseApiKey && googleCseCx, googleCseSearch],
+    ["Firecrawl", firecrawlApiKey, firecrawlSearch], // credits — keep low (search+scrape)
+    ["DDG", true, duckDuckGoSearch],            // keyless, last resort
+  ];
+
   let results = [];
   const usedEngines = [];
-
-  // 1. Serper first (Google results, best quality)
-  if (serperApiKey) {
-    results = await serperSearch(q);
-    if (results.length) usedEngines.push("Serper");
-  }
-
-  // 2. If Serper insufficient, try Tavily
-  if (results.length < 3 && tavilyApiKey) {
-    const tavilyResults = await tavilySearch(q);
-    if (tavilyResults.length) {
-      usedEngines.push("Tavily");
-      results = mergeResults(results, tavilyResults);
-    }
-  }
-
-  // 3. Google CSE (limited to configured sites, use as supplement not primary)
-  if (results.length < 3 && googleCseApiKey) {
-    const gResults = await googleCseSearch(q);
-    if (gResults.length) {
-      usedEngines.push("GoogleCSE");
-      results = mergeResults(results, gResults);
-    }
-  }
-
-  // 4. Brave as further fallback
-  if (results.length < 3 && braveApiKey) {
-    const braveResults = await braveSearch(q);
-    if (braveResults.length) {
-      usedEngines.push("Brave");
-      results = mergeResults(results, braveResults);
-    }
-  }
-
-  // 5. DuckDuckGo as last resort
-  if (results.length < 3) {
-    const ddgResults = await duckDuckGoSearch(q).catch(() => []);
-    if (ddgResults.length) {
-      usedEngines.push("DDG");
-      results = mergeResults(results, ddgResults);
+  for (const [name, gate, fn] of chain) {
+    if (results.length >= 3) break;
+    if (!gate) continue;
+    const r = await fn(q).catch(() => []);
+    if (r.length) {
+      usedEngines.push(name);
+      results = mergeResults(results, r);
     }
   }
 
@@ -2480,7 +2624,8 @@ function mergeResults(existing, incoming) {
 }
 
 // Fetch page text (lightweight, for auto-fetch after search)
-async function fetchPageText(url, maxLen = 6000) {
+// Plain fetch + regex extract (free, fast). Returns "" on failure / non-text / JS-thin pages.
+async function plainFetchText(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {
@@ -2497,12 +2642,108 @@ async function fetchPageText(url, maxLen = 6000) {
     if (!resp.ok) return "";
     const contentType = resp.headers.get("content-type") || "";
     if (!contentType.includes("html") && !contentType.includes("text")) return "";
-    const html = await resp.text();
-    return extractTextFromHtml(html).slice(0, maxLen);
+    return extractTextFromHtml(await resp.text());
   } catch {
     clearTimeout(timeout);
     return "";
   }
+}
+
+// Jina Reader — free, no key, renders JS, returns clean markdown
+async function jinaFetchText(url) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const resp = await fetch("https://r.jina.ai/" + url, {
+      headers: { "x-respond-with": "markdown", "accept": "text/plain" },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) return "";
+    return (await resp.text()).trim();
+  } catch { return ""; }
+}
+
+// Firecrawl scrape — handles JS + anti-bot, returns markdown (credits)
+async function firecrawlScrape(url) {
+  if (!firecrawlApiKey) return "";
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
+    const resp = await fetch("https://api.firecrawl.dev/v1/scrape", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${firecrawlApiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ url, formats: ["markdown"], onlyMainContent: true }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) return "";
+    const data = await resp.json();
+    return String(data?.data?.markdown || "").trim();
+  } catch { return ""; }
+}
+
+// Exa /contents — clean parsed text for a known URL (credits)
+async function exaContents(url) {
+  if (!exaApiKey) return "";
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const resp = await fetch("https://api.exa.ai/contents", {
+      method: "POST",
+      headers: { "x-api-key": exaApiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ urls: [url], text: { maxCharacters: 24000 } }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) return "";
+    const data = await resp.json();
+    return String(data?.results?.[0]?.text || "").trim();
+  } catch { return ""; }
+}
+
+// Robust fetch: plain → Jina (JS) → Firecrawl (anti-bot) → Exa contents. Stops at first solid hit.
+async function robustFetchText(url) {
+  const THIN = 200; // below this, treat as JS-rendered / blocked and escalate
+  let text = await plainFetchText(url);
+  if (text.length >= THIN) return text;
+  const jina = await jinaFetchText(url);
+  if (jina.length >= THIN) return jina;
+  const fc = await firecrawlScrape(url);
+  if (fc.length >= THIN) return fc;
+  const exa = await exaContents(url);
+  if (exa.length >= THIN) return exa;
+  return text || jina || fc || exa || "";
+}
+
+// Fetch a page and (optionally) keep only query-relevant content at ingestion time.
+// Exa /contents with query-biased highlights — provider-side semantic passage selection
+// (verbatim, NO generative synthesis → ~5x faster than summary), ≈ claude.ai inline content.
+async function exaContentsRelevant(url, query) {
+  if (!exaApiKey || !query) return "";
+  try {
+    const c = new AbortController(); const t = setTimeout(() => c.abort(), 15000);
+    const r = await fetch("https://api.exa.ai/contents", {
+      method: "POST",
+      headers: { "x-api-key": exaApiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ urls: [url], highlights: { query, numSentences: 5, highlightsPerUrl: 5 } }),
+      signal: c.signal,
+    });
+    clearTimeout(t); if (!r.ok) return "";
+    const d = await r.json();
+    return (Array.isArray(d?.results?.[0]?.highlights) ? d.results[0].highlights.join("\n… ") : "").trim();
+  } catch { return ""; }
+}
+async function fetchPageText(url, maxLen = 6000, query = "") {
+  // Preferred: Exa /contents query-relevant excerpt (provider-side relevance, no Haiku round-trip)
+  if (query) {
+    const exa = await exaContentsRelevant(url, query);
+    if (exa.length >= 200) return exa.slice(0, maxLen);
+  }
+  // Fallback: robust raw fetch + local Haiku query-extraction
+  const text = await robustFetchText(url);
+  if (!text) return "";
+  return await extractRelevant(text, query, maxLen);
 }
 
 // DuckDuckGo HTML search (no API key needed, better Chinese coverage than Brave)
