@@ -189,6 +189,8 @@
       .tag-feat { background: rgba(52, 140, 90, 0.1); color: #2a7a4a; }
       .tag-fix { background: rgba(180, 120, 40, 0.1); color: #9a6a20; }
       .tag-perf { background: rgba(80, 100, 180, 0.1); color: #4a5aaa; }
+      .tag-blog { background: rgba(120, 80, 180, 0.1); color: #6a4aaa; }
+      .entry-body a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(0,0,0,0.15); }
 
       footer {
         display: flex;
@@ -242,6 +244,32 @@
       </div>
 
       <div class="timeline">
+
+        <div class="entry highlight">
+          <div class="entry-date">2026-06-10</div>
+          <div class="entry-title">
+            <span class="tag tag-perf">perf</span>
+            <span class="zh">搜索 / 抓取管线重写 —— 又快又准</span>
+            <span class="en">Search & fetch pipeline rewrite — faster and more accurate</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">把检索管线对照 Claude.ai 逐层重写：Brave 内联片段优先（够富就不抓页）、Exa highlights 做查询相关抽取（替掉整页字符截断）、9 引擎兜底链保覆盖、<code>system/tools</code> 前缀缓存 + 历史只追加撑住多轮（最多 12 轮）。在 30 道 GAIA+FRAMES 基准上，自建 harness 从 37% 提到 67%，对标 Claude.ai 的 80%。</span>
+            <span class="en">The retrieval pipeline was rewritten layer by layer against Claude.ai: inline Brave snippets first (skip the fetch when rich enough), Exa highlights for query-relevant extraction (replacing whole-page truncation), a 9-engine fallback chain for coverage, and prefix caching + append-only history to sustain many rounds (up to 12). On a 30-task GAIA+FRAMES benchmark the harness went from 37% to 67%, versus Claude.ai's 80%.</span>
+          </div>
+        </div>
+
+        <div class="entry highlight">
+          <div class="entry-date">2026-06-10</div>
+          <div class="entry-title">
+            <span class="tag tag-blog">blog</span>
+            <span class="zh">技术博客：把搜索调到 Claude.ai 的水准</span>
+            <span class="en">Tech blog: Tuning Search to Claude.ai Level</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">双语技术长文，拆解 Claude.ai 搜索"又快又准"的 5 个工程优化，再用自建 harness 的受控实验逐条验证（延迟、token、逐题 pass/fail，配框架图）。<a href="https://sg.yaoyuheng2001.me/posts/search-optimization/" target="_blank" rel="noopener">阅读全文 →</a></span>
+            <span class="en">A bilingual deep-dive: the 5 engineering optimizations behind Claude.ai's fast, accurate search, then validated one by one with controlled experiments on the hand-rolled harness (latency, tokens, per-task pass/fail, with diagrams). <a href="https://sg.yaoyuheng2001.me/posts/search-optimization/en/" target="_blank" rel="noopener">Read more →</a></span>
+          </div>
+        </div>
 
         <div class="entry highlight">
           <div class="entry-date">2026-05-23</div>
@@ -426,6 +454,19 @@
           <div class="entry-body">
             <span class="zh">在对话中直接生成 Word (.docx)、Excel (.xlsx) 和 PowerPoint (.pptx) 文件，在 Artifact 面板中一键下载。</span>
             <span class="en">Generate Word, Excel, and PowerPoint files directly from conversation — downloadable from the artifact panel.</span>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">2026-05-13</div>
+          <div class="entry-title">
+            <span class="tag tag-blog">blog</span>
+            <span class="zh">技术博客：用 30 道题量化我和 Claude.ai 的差距</span>
+            <span class="en">Tech blog: Benchmarking My Agent vs Claude.ai with 30 Tasks</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">固定模型、只变 harness 的对照评测：裸模型 0% → 自建 harness 37% → Claude.ai 80%。差距主要在检索管线而非模型——这也是上面"管线重写"的起点。<a href="https://sg.yaoyuheng2001.me/posts/agent-eval/" target="_blank" rel="noopener">阅读全文 →</a></span>
+            <span class="en">A controlled benchmark holding the model fixed and varying only the harness: naked model 0% → hand-rolled harness 37% → Claude.ai 80%. The gap is mostly in the retrieval pipeline, not the model — the starting point for the rewrite above. <a href="https://sg.yaoyuheng2001.me/posts/agent-eval/en/" target="_blank" rel="noopener">Read more →</a></span>
           </div>
         </div>
 

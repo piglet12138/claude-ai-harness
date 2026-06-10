@@ -110,7 +110,7 @@
 | 能力 | Claude.ai | Claude AI Harness | LibreChat |
 |------|-----------|-------------------|-----------|
 | Agent Loop | ✅ | ✅ | ✅ (LangChain) |
-| Web Search | ✅ | ✅ 5-engine Fallback | ✅ Multi-provider |
+| Web Search | ✅ | ✅ 9-engine, inline-first | ✅ Multi-provider |
 | URL Fetch | ✅ | ✅ | ❌ |
 | Code Execution | ✅ Sandbox | ✅ JS/Python | ✅ Docker |
 | Artifacts | ✅ | ✅ HTML/MD/Code | ✅ |
@@ -178,10 +178,10 @@ npm start              # → http://localhost:3040
 │  server.mjs + db.mjs                                        │
 │                                                             │
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │  Agentic Loop (max 8 rounds, token budget mgmt)       │  │
+│  │  Agentic Loop (max 12 rounds, token budget mgmt)      │  │
 │  │                                                       │  │
 │  │  Tools:                                               │  │
-│  │  • web_search  (5-engine fallback + auto-fetch)       │  │
+│  │  • web_search  (inline-first · 9-engine fallback)     │  │
 │  │  • fetch_url   (HTTP GET, HTML → text)                │  │
 │  │  • run_code    (JS/Python + Office file generation)   │  │
 │  │  • create_artifact (HTML/Markdown/Code)               │  │
@@ -206,8 +206,8 @@ npm start              # → http://localhost:3040
 | 文档存入对话对象内 | 自然的生命周期管理 |
 | CSS 变量 + data-theme | 一份代码两套主题 |
 | SQLite + localStorage 双层 | 服务端持久 + 前端缓存加速首屏 |
-| 5 引擎 Fallback 搜索 | 最大化免费额度，保证可用性 |
-| 搜索后自动抓取全文 | 摘要不够深，全文才能支撑深度回答 |
+| 9 引擎兜底 + 内联优先 | Brave 内联片段够富就不抓页；返空才逐级兜底，省额度又保覆盖 |
+| Exa highlights 抽取 | 查询相关逐字摘录替掉整页字符截断，避免"答案被位置截断"，且无额外模型往返 |
 | Token 预算管理 (80K) | 主动压缩上下文，防止 API 400 错误 |
 | .cjs + module resolve 注入 | 让 run_code 的 JS 能 require() npm 包 |
 | 文件 sidecar .meta.json | 服务重启后自动恢复文件下载链接 |
