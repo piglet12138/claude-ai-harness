@@ -4434,8 +4434,13 @@ img.brand-logo.large {
    right doc panel as a card list (empty/list/detail states).
    ============================================================ */
 
-/* Wider left sidebar */
-.app-shell { grid-template-columns: 300px minmax(0, 1fr); }
+/* Wider left sidebar — desktop only. On mobile (≤1020px) the sidebar is a
+   fixed drawer (out of flow), so this 300px track would become a phantom
+   column that squishes the workspace and leaves blank space on the right.
+   Scoping to desktop lets the @media(max-width:1020px) single-column win. */
+@media (min-width: 1021px) {
+  .app-shell { grid-template-columns: 300px minmax(0, 1fr); }
+}
 
 /* Collapse button in the rail header */
 .rail-collapse-btn {
@@ -4468,8 +4473,12 @@ img.brand-logo.large {
 .thread-label { font-size: 13.5px; }
 .rail-item, .primary-nav { font-size: 14.5px; }
 
-/* Cap the right doc panel so it never dominates the screen */
-.chat-view { grid-template-columns: minmax(0, 1fr) minmax(360px, 460px); }
+/* Cap the right doc panel so it never dominates the screen — desktop only.
+   On mobile the doc panel is a full-screen overlay; the chat must stay single
+   column (see @media(max-width:1020px)). */
+@media (min-width: 1021px) {
+  .chat-view { grid-template-columns: minmax(0, 1fr) minmax(360px, 460px); }
+}
 
 /* List mode: hide per-document actions, keep only close */
 .doc-panel.list-mode .doc-actions > :not(#closeDocPanel) { display: none; }
