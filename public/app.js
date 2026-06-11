@@ -82,6 +82,7 @@ async function init() {
   wireEvents();
   const session = await fetchJson("/api/session").catch(() => ({ authenticated: false }));
   state.authenticated = session.authenticated;
+  state.email = session.email || "";
   state.docOpen = false;
   state.authenticated ? showChat() : showLogin();
 }
@@ -208,7 +209,7 @@ function wireEvents() {
   initScrollBottomBtn();
   updateSendButton();
 
-  document.querySelectorAll(".starter").forEach((button) => {
+  document.querySelectorAll(".starter, .hero-pill").forEach((button) => {
     button.addEventListener("click", () => {
       els.prompt.value = button.dataset.prompt || "";
       autosize();
@@ -308,6 +309,7 @@ async function login(event) {
     return;
   }
   state.authenticated = true;
+  state.email = form.get("email") || "";
   showChat();
 }
 
@@ -329,6 +331,7 @@ async function register(event) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) { errorEl.textContent = data.error || "注册失败"; return; }
   state.authenticated = true;
+  state.email = email || "";
   showChat();
 }
 
@@ -1050,9 +1053,26 @@ function showLogin() {
   document.body.classList.remove("sidebar-open");
 }
 
+// Time-aware greeting + sidebar profile card
+function renderGreeting() {
+  const h = new Date().getHours();
+  const part = h < 5 ? "夜深了" : h < 11 ? "早上好" : h < 13 ? "中午好" : h < 18 ? "下午好" : "晚上好";
+  const name = (state.email || "").split("@")[0] || "";
+  const greetEl = document.querySelector("#heroGreeting");
+  if (greetEl) {
+    const hello = name ? `${part}，${escapeHtml(name)}` : part;
+    greetEl.innerHTML = `<span class="wave">👋</span> ${hello}<br>今天想 <span class="accent">做点什么</span>？`;
+  }
+  const av = document.querySelector("#profileAvatar");
+  const nm = document.querySelector("#profileName");
+  if (av) av.textContent = (name.charAt(0) || "·").toUpperCase();
+  if (nm) nm.textContent = name || "已登录";
+}
+
 async function showChat() {
   els.loginView.classList.add("hidden");
   els.chatView.classList.remove("hidden");
+  renderGreeting();
   initSidebarSearch();
   // Load threads from server (SQLite)
   try {
@@ -1473,6 +1493,22 @@ function buildThreadItem(thread, query) {
   return item;
 }
 
+// Bucket a thread into a time group by its last-updated timestamp.
+function threadTimeBucket(thread) {
+  const raw = thread.updatedAt || thread.createdAt;
+  if (!raw) return "更早";
+  const d = new Date(typeof raw === "string" ? raw.replace(" ", "T") : raw);
+  if (isNaN(d.getTime())) return "更早";
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfThatDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((startOfToday - startOfThatDay) / 86400000);
+  if (diffDays <= 0) return "今天";
+  if (diffDays === 1) return "昨天";
+  if (diffDays <= 7) return "本周";
+  return "更早";
+}
+
 function renderThreads() {
   els.threadList.innerHTML = "";
   els.starredList.innerHTML = "";
@@ -1489,10 +1525,30 @@ function renderThreads() {
     els.starredLabel.classList.add("hidden");
   }
 
-  // Recent section (non-starred, non-archived)
+  // Recent section (non-starred, non-archived) — grouped by time when not searching
   const visible = state.threads.filter((t) => !t.starred && !t.archived && (!query || threadMatchesSearch(t, query)));
-  for (const thread of visible) {
-    els.threadList.append(buildThreadItem(thread, query));
+  const recentLabel = document.querySelector("#recentLabel");
+  if (query) {
+    recentLabel?.classList.remove("hidden");
+    for (const thread of visible) {
+      els.threadList.append(buildThreadItem(thread, query));
+    }
+  } else {
+    recentLabel?.classList.add("hidden");
+    const order = ["今天", "昨天", "本周", "更早"];
+    const groups = {};
+    for (const t of visible) (groups[threadTimeBucket(t)] ||= []).push(t);
+    for (const label of order) {
+      const items = groups[label];
+      if (!items || !items.length) continue;
+      const header = document.createElement("div");
+      header.className = "nav-label nav-label-sub";
+      header.textContent = label;
+      els.threadList.append(header);
+      for (const thread of items) {
+        els.threadList.append(buildThreadItem(thread, query));
+      }
+    }
   }
 
   if (visible.length === 0 && starredThreads.length === 0 && query) {
