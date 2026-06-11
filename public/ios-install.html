@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>在 iPhone 上安装 Claude</title>
+<meta name="robots" content="noindex, nofollow" />
+<link rel="icon" href="/logo.svg" type="image/svg+xml" />
+<meta name="theme-color" content="#f4efe7" />
+<style>
+  :root{
+    --bg:#f4efe7; --ink:#2c2218; --muted:#6f6253; --faint:#9a8b78;
+    --accent:#c76342; --accent-soft:#f3e3d8; --surface:#fffefb; --line:#e8dccb;
+    --shadow:0 10px 30px rgba(70,45,25,.10);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    line-height:1.6; -webkit-font-smoothing:antialiased;
+    padding:max(20px,env(safe-area-inset-top)) 16px max(28px,env(safe-area-inset-bottom));
+  }
+  .wrap{max-width:460px;margin:0 auto}
+  .brand{display:flex;align-items:center;justify-content:center;gap:10px;margin:6px 0 18px}
+  .brand img{width:34px;height:34px;border-radius:9px}
+  .brand b{font-size:18px;font-weight:600;letter-spacing:.2px}
+  h1{font-size:23px;line-height:1.3;text-align:center;margin:0 0 6px}
+  h1 .em{color:var(--accent)}
+  .sub{text-align:center;color:var(--muted);font-size:14px;margin:0 auto 22px;max-width:340px}
+
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:20px;margin-bottom:16px}
+
+  .qr-card{text-align:center}
+  .qr-card .qr-title{font-weight:600;font-size:15px;margin-bottom:4px}
+  .qr-card .qr-hint{color:var(--muted);font-size:13px;margin-bottom:14px}
+  .qr-box{width:208px;height:208px;margin:0 auto;background:#fffdf9;border:1px solid var(--line);border-radius:14px;padding:12px}
+  .qr-box svg{width:100%;height:100%;display:block}
+  .url{margin-top:14px;display:inline-block;font-size:13px;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:6px 14px;word-break:break-all}
+
+  .steps{counter-reset:s;margin:0;padding:0;list-style:none}
+  .step{display:flex;gap:14px;align-items:flex-start;padding:14px 6px;border-bottom:1px solid var(--line)}
+  .step:last-child{border-bottom:0}
+  .step .n{counter-increment:s;flex:none;width:30px;height:30px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;font-size:15px;display:grid;place-items:center}
+  .step .n::before{content:counter(s)}
+  .step .txt{flex:1;min-width:0;padding-top:2px}
+  .step .txt b{font-weight:600}
+  .step .txt .d{color:var(--muted);font-size:13.5px;margin-top:2px}
+  .ic{display:inline-flex;vertical-align:-5px;margin:0 2px;color:var(--accent)}
+  .chip{display:inline-flex;align-items:center;gap:5px;background:var(--accent-soft);border-radius:8px;padding:2px 8px;font-size:13px;font-weight:600;white-space:nowrap}
+
+  .note{background:#fdf6ee;border:1px solid #f0e0cb;border-radius:14px;padding:14px 16px;font-size:13.5px;color:#7a5a32;margin-bottom:14px}
+  .note b{color:#8a4b22}
+  .foot{text-align:center;color:var(--faint);font-size:12px;margin-top:18px}
+  .foot a{color:var(--faint)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><img src="/logo.svg" alt="" /><b>Claude</b></div>
+  <h1>在 iPhone 上<span class="em">安装</span> Claude</h1>
+  <p class="sub">iOS 不需要安装包,用 Safari「添加到主屏幕」即可装成独立 App(全屏、有图标、和原生一样)。</p>
+
+  <div class="card qr-card">
+    <div class="qr-title">① 用 iPhone 相机扫码</div>
+    <div class="qr-hint">扫码会自动在 Safari 打开,跳过手输网址</div>
+    <div class="qr-box">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 31 31" shape-rendering="crispEdges"><path fill="#fffdf9" d="M0 0h31v31H0z"/><path stroke="#2c2218" d="M1 1.5h7m2 0h2m3 0h1m2 0h3m2 0h7M1 2.5h1m5 0h1m1 0h1m1 0h4m4 0h3m1 0h1m5 0h1M1 3.5h1m1 0h3m1 0h1m2 0h1m5 0h1m2 0h1m3 0h1m1 0h3m1 0h1M1 4.5h1m1 0h3m1 0h1m2 0h1m1 0h3m4 0h2m2 0h1m1 0h3m1 0h1M1 5.5h1m1 0h3m1 0h1m1 0h1m1 0h2m1 0h1m2 0h1m1 0h2m2 0h1m1 0h3m1 0h1M1 6.5h1m5 0h1m2 0h1m1 0h2m1 0h2m2 0h2m2 0h1m5 0h1M1 7.5h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7M16 8.5h1m1 0h3M1 9.5h1m1 0h1m1 0h1m1 0h1m2 0h2m1 0h1m4 0h4m3 0h1m2 0h1M1 10.5h3m2 0h1m6 0h2m2 0h3m1 0h3m2 0h1m2 0h1M1 11.5h1m1 0h3m1 0h6m2 0h1m1 0h3m2 0h4m1 0h3M1 12.5h4m3 0h1m1 0h2m1 0h4m1 0h1m1 0h3m5 0h1M2 13.5h3m1 0h2m1 0h1m5 0h1m2 0h2m2 0h3m1 0h1m1 0h2M2 14.5h2m2 0h1m1 0h2m5 0h1m1 0h3m1 0h3m2 0h1m2 0h1M1 15.5h1m1 0h1m2 0h2m3 0h4m4 0h1m2 0h5m1 0h2M1 16.5h2m5 0h1m1 0h1m5 0h1m1 0h1m1 0h1m3 0h1m1 0h1m1 0h1M1 17.5h1m1 0h5m4 0h1m4 0h4m2 0h1m2 0h1m1 0h2M6 18.5h1m6 0h2m2 0h3m1 0h3m2 0h2m1 0h1M1 19.5h1m1 0h1m1 0h1m1 0h1m1 0h4m2 0h1m3 0h1m2 0h1m2 0h1m2 0h2M2 20.5h4m5 0h1m2 0h2m1 0h2m2 0h3m1 0h2m1 0h1M1 21.5h1m1 0h2m1 0h4m1 0h1m3 0h11M9 22.5h1m1 0h2m2 0h1m2 0h4m3 0h1m1 0h3M1 23.5h7m2 0h1m1 0h1m1 0h1m4 0h3m1 0h1m1 0h2m1 0h2M1 24.5h1m5 0h1m2 0h4m2 0h4m1 0h1m3 0h2m2 0h1M1 25.5h1m1 0h3m1 0h1m1 0h3m1 0h1m3 0h3m1 0h5m3 0h1M1 26.5h1m1 0h3m1 0h1m2 0h1m6 0h1m6 0h2m1 0h3M1 27.5h1m1 0h3m1 0h1m1 0h3m6 0h1m2 0h2m1 0h3m2 0h1M1 28.5h1m5 0h1m2 0h1m1 0h2m2 0h3m1 0h4m1 0h1m2 0h1M1 29.5h7m1 0h1m2 0h2m1 0h4m1 0h4m1 0h1m2 0h2"/></svg>
+    </div>
+    <div class="url">claude.yaoyuheng2001.me/app</div>
+  </div>
+
+  <div class="card">
+    <ol class="steps">
+      <li class="step">
+        <div class="n"></div>
+        <div class="txt"><b>用 Safari 打开</b><div class="d">扫上方二维码,或在 Safari 地址栏输入 <b>claude.yaoyuheng2001.me/app</b></div></div>
+      </li>
+      <li class="step">
+        <div class="n"></div>
+        <div class="txt"><b>点底部「分享」按钮
+          <span class="ic" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m8 7 4-4 4 4"/><path d="M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7"/></svg>
+          </span></b>
+          <div class="d">就是中间带向上箭头的方块图标(底部工具栏中间)</div></div>
+      </li>
+      <li class="step">
+        <div class="n"></div>
+        <div class="txt"><b>下滑选 <span class="chip">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M12 8v8M8 12h8"/></svg>
+          添加到主屏幕</span></b>
+          <div class="d">在分享菜单里往下滑找到这一项</div></div>
+      </li>
+      <li class="step">
+        <div class="n"></div>
+        <div class="txt"><b>右上角点「添加」</b><div class="d">可以保留默认名字「Claude」,直接点添加</div></div>
+      </li>
+      <li class="step">
+        <div class="n"></div>
+        <div class="txt"><b>桌面出现 Claude 图标 <img src="/icons/180.png" alt="" style="width:22px;height:22px;border-radius:6px;vertical-align:-6px;margin-left:2px"></b>
+          <div class="d">点开就是全屏 App,登录一次,之后直接进聊天</div></div>
+      </li>
+    </ol>
+  </div>
+
+  <div class="note">
+    <b>⚠️ 一定要用 Safari。</b> iOS 上只有 Safari 能「添加到主屏幕」装成独立 App。<br>
+    如果从<b>微信 / QQ</b> 里打开:点右上角「···」→「在 Safari 中打开」,再按上面步骤。
+  </div>
+
+  <div class="foot">Claude AI Harness · <a href="/app">claude.yaoyuheng2001.me/app</a></div>
+</div>
+</body>
+</html>
