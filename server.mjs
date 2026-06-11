@@ -59,7 +59,7 @@ const model = process.env.MODEL || env.MODEL || "claude-opus-4-7";
 // 流畅模式（DeepSeek 官方 API，OpenAI 兼容）—— 快速稳定的纯聊天路径
 const deepseekApiKey = process.env.DEEPSEEK_API_KEY || env.DEEPSEEK_API_KEY;
 const deepseekBaseUrl = process.env.DEEPSEEK_BASE_URL || env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
-const deepseekModel = process.env.DEEPSEEK_MODEL || env.DEEPSEEK_MODEL || "deepseek-chat";
+const deepseekModel = process.env.DEEPSEEK_MODEL || env.DEEPSEEK_MODEL || "deepseek-v4-flash";
 const accessEmail = process.env.ACCESS_EMAIL || env.ACCESS_EMAIL;
 const accessPassword = process.env.ACCESS_PASSWORD || env.ACCESS_PASSWORD;
 const sessionSecret = process.env.SESSION_SECRET || env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
