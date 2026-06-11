@@ -1779,6 +1779,53 @@ function renderDocuments() {
   }
 }
 
+/* ── Dynamic streaming status indicator (thinking / live tool activity) ──
+   Fills the "dead air" while waiting for the first token, and reflects what
+   the agent is currently doing. Disappears as soon as prose starts streaming. */
+const THINKING_PHRASES = ["正在思考", "正在整理思路", "正在组织语言", "正在斟酌"];
+let _thinkPhraseIdx = 0;
+
+function truncStatus(s, n) { s = String(s); return s.length > n ? s.slice(0, n) + "…" : s; }
+
+function streamStatusInfo(message) {
+  const running = message.toolCalls?.find((t) => t.status === "running");
+  if (running) {
+    let host = "";
+    try { if (running.args?.url) host = new URL(running.args.url).hostname.replace(/^www\./, ""); } catch {}
+    const q = running.args?.query;
+    const map = {
+      web_search: ["⌕", q ? `正在搜索「${truncStatus(q, 16)}」` : "正在搜索网络"],
+      fetch_url: ["◎", host ? `正在阅读 ${host}` : "正在阅读网页"],
+      run_code: ["▸", "正在运行代码"],
+      create_artifact: ["◆", running.args?.title ? `正在撰写「${truncStatus(running.args.title, 14)}」` : "正在撰写文档"],
+      generate_long_document: ["✎", "正在生成长文档"],
+    };
+    const hit = map[running.name] || ["·", "正在处理"];
+    return { mode: "tool", icon: hit[0], text: hit[1] };
+  }
+  const hasText = (displayAssistantMessage(message.content) || "").trim();
+  if (!hasText) return { mode: "thinking", icon: "✶", text: THINKING_PHRASES[_thinkPhraseIdx % THINKING_PHRASES.length] };
+  return null;
+}
+
+function buildStreamStatusEl(message) {
+  const info = streamStatusInfo(message);
+  if (!info) return null;
+  const el = document.createElement("div");
+  el.className = "stream-status";
+  el.dataset.mode = info.mode;
+  el.innerHTML = `<span class="stream-status-dot" aria-hidden="true"></span><span class="stream-status-icon" aria-hidden="true">${info.icon}</span><span class="stream-status-text">${escapeHtml(info.text)}…</span>`;
+  return el;
+}
+
+// Cycle the "thinking" phrase while streaming — lightweight, no full re-render.
+setInterval(() => {
+  if (!state.streaming) return;
+  _thinkPhraseIdx++;
+  const t = document.querySelector('.message.streaming .stream-status[data-mode="thinking"] .stream-status-text');
+  if (t) t.textContent = THINKING_PHRASES[_thinkPhraseIdx % THINKING_PHRASES.length] + "…";
+}, 2400);
+
 function renderMessages() {
   const thread = activeThread();
   const isWelcome = thread.messages.length === 0;
@@ -1801,6 +1848,11 @@ function renderMessages() {
     const bubble = document.createElement("div");
     bubble.className = `message-bubble${isStreamingMessage ? " streaming" : ""}`;
     if (message.role === "assistant") {
+      // Live status indicator while streaming (thinking / tool activity)
+      if (isStreamingMessage) {
+        const statusEl = buildStreamStatusEl(message);
+        if (statusEl) body.append(statusEl);
+      }
       // Render tool call cards before the text content
       if (message.toolCalls?.length) {
         const toolsDiv = document.createElement("div");

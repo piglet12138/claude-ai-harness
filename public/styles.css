@@ -4578,3 +4578,55 @@ img.brand-logo.large {
 }
 .doc-empty-title { font-size: 15px; font-weight: 600; color: var(--ink); }
 .doc-empty-hint { font-size: 13px; color: var(--faint); line-height: 1.5; max-width: 240px; }
+
+/* ── Dynamic streaming status indicator ───────────────────────────── */
+.stream-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 10px;
+  padding: 0;
+  font-size: 14.5px;
+  line-height: 1.4;
+  user-select: none;
+}
+.stream-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 var(--accent-glow, rgba(199, 99, 66, 0.4));
+  animation: stream-pulse 1.15s ease-in-out infinite;
+}
+.stream-status-icon {
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 1;
+  animation: stream-spin 2.4s linear infinite;
+}
+.stream-status[data-mode="thinking"] .stream-status-icon { animation: stream-spin 3.2s linear infinite; }
+.stream-status-text {
+  background-image: linear-gradient(90deg, var(--muted) 32%, var(--ink) 50%, var(--muted) 68%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: stream-shimmer 1.9s linear infinite;
+}
+@keyframes stream-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.78); }
+  50%      { opacity: 1;    transform: scale(1.18); }
+}
+@keyframes stream-shimmer {
+  0%   { background-position: 150% 0; }
+  100% { background-position: -150% 0; }
+}
+@keyframes stream-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stream-status-dot, .stream-status-icon, .stream-status-text { animation: none; }
+  .stream-status-text { -webkit-text-fill-color: var(--muted); color: var(--muted); }
+}
