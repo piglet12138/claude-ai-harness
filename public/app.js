@@ -1757,7 +1757,9 @@ function renderDocuments() {
 
 function renderMessages() {
   const thread = activeThread();
-  els.hero.classList.toggle("hidden", thread.messages.length > 0);
+  const isWelcome = thread.messages.length === 0;
+  els.hero.classList.toggle("hidden", !isWelcome);
+  els.hero.parentElement?.classList.toggle("welcome", isWelcome);
   els.messages.innerHTML = "";
   for (const message of thread.messages) {
     const wrapper = document.createElement("div");

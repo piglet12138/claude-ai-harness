@@ -4356,3 +4356,75 @@ img.brand-logo.large {
 @media (max-width: 640px) {
   .starter-grid { grid-template-columns: 1fr; }
 }
+
+/* ============================================================
+   Ember layout pass — welcome state with centered composer
+   (greeting → composer → cards → pills), peachy new-chat,
+   roomier proportions. Aligns to claude.ai welcome screen.
+   ============================================================ */
+
+/* Cards+pills live after the composer; hidden except in welcome */
+#heroExtras { display: none; }
+
+/* Welcome (empty thread): center the stack, composer under greeting */
+.chat-column.welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  row-gap: 0;
+  padding: 24px 16px 36px;
+}
+.chat-column.welcome > #messages { display: none; }
+.chat-column.welcome > #hero {
+  order: 1;
+  margin-top: auto;
+  width: min(720px, 100%);
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  align-self: center;
+}
+.chat-column.welcome > #composer {
+  order: 2;
+  width: min(720px, 100%);
+  margin: 0 auto;
+}
+.chat-column.welcome > #heroExtras {
+  display: block;
+  order: 3;
+  width: min(720px, 100%);
+  margin: 18px auto auto;
+}
+
+/* Roomier greeting in welcome */
+.chat-column.welcome .greeting {
+  margin-bottom: 26px;
+  font-size: clamp(32px, 4.4vw, 42px);
+  line-height: 1.16;
+}
+
+.hero-disclaimer {
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--faint);
+  margin: 11px 0 20px;
+}
+.hero-extras .starter-grid { margin-top: 0; }
+
+/* Peachy "新建对话" to match mockup's highlighted new button */
+.primary-nav {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent-ink);
+  font-weight: 500;
+}
+.primary-nav:hover {
+  background: color-mix(in oklab, var(--accent-soft), var(--accent) 14%);
+  border-color: transparent;
+}
+
+@media (max-width: 640px) {
+  .chat-column.welcome { padding: 16px 10px 24px; }
+  .chat-column.welcome .greeting { font-size: clamp(26px, 7vw, 34px); }
+}
