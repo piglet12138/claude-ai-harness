@@ -56,6 +56,10 @@ const port = Number(env.PORT || process.env.PORT || 3040);
 const baseUrl = process.env.ANTHROPIC_BASE_URL || env.ANTHROPIC_BASE_URL || "https://api.anthropic.com/v1";
 const apiKey = process.env.ANTHROPIC_API_KEY || env.ANTHROPIC_API_KEY;
 const model = process.env.MODEL || env.MODEL || "claude-opus-4-7";
+// 流畅模式（DeepSeek 官方 API，OpenAI 兼容）—— 快速稳定的纯聊天路径
+const deepseekApiKey = process.env.DEEPSEEK_API_KEY || env.DEEPSEEK_API_KEY;
+const deepseekBaseUrl = process.env.DEEPSEEK_BASE_URL || env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
+const deepseekModel = process.env.DEEPSEEK_MODEL || env.DEEPSEEK_MODEL || "deepseek-chat";
 const accessEmail = process.env.ACCESS_EMAIL || env.ACCESS_EMAIL;
 const accessPassword = process.env.ACCESS_PASSWORD || env.ACCESS_PASSWORD;
 const sessionSecret = process.env.SESSION_SECRET || env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
@@ -1441,11 +1445,118 @@ async function uploadGoogleDoc(res, body) {
   return json(res, { ok: true, file: data });
 }
 
+// 把前端消息的 content（字符串或内容块数组）拍平成纯文本（DeepSeek 纯文本聊天用）
+function flattenContentToText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((p) => {
+        if (typeof p === "string") return p;
+        if (p?.type === "text") return p.text || "";
+        if (p?.type === "image_url" || p?.type === "image") return "[图片]";
+        if (p?.type === "pdf_url") return `[文件:${p.pdf_url?.name || "PDF"}]`;
+        if (p?.type === "file_url") return `[文件:${p.file_url?.name || "文件"}]`;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return String(content ?? "");
+}
+
+// 流畅模式：DeepSeek 官方 API（OpenAI 兼容）流式聊天，转译成前端的 SSE delta 事件
+async function chatDeepSeek(res, messages, session, threadId, temperature) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+    "x-accel-buffering": "no",
+  });
+  res.socket?.setNoDelay?.(true);
+  res.flushHeaders?.();
+  res.write(": stream\n\n");
+
+  if (!deepseekApiKey) {
+    res.write(`data: ${JSON.stringify({ delta: "流畅模式未配置（服务端缺少 DEEPSEEK_API_KEY）。" })}\n\n`);
+    res.write("event: done\ndata: {}\n\n");
+    return res.end();
+  }
+
+  const userMemory = session ? dbMemory.get(session.userId) : "";
+  const sys = `你是一个聪明、可靠的中文 AI 助手（流畅模式）。回答清晰、自然、有条理，重点突出，使用 Markdown 排版。${userMemory ? `\n\n# 关于用户的长期记忆\n${userMemory}` : ""}`;
+
+  const oaMessages = [{ role: "system", content: sys }];
+  for (const m of messages.slice(-40)) {
+    const role = m.role === "assistant" ? "assistant" : "user";
+    const text = flattenContentToText(m.content);
+    if (text) oaMessages.push({ role, content: text });
+  }
+
+  const started = Date.now();
+  let outText = "";
+  const controller = new AbortController();
+  res.on("close", () => controller.abort());
+
+  try {
+    const upstream = await fetch(`${deepseekBaseUrl.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${deepseekApiKey}` },
+      body: JSON.stringify({ model: deepseekModel, messages: oaMessages, stream: true, temperature, max_tokens: 4096 }),
+      signal: controller.signal,
+    });
+    if (!upstream.ok || !upstream.body) {
+      const errText = await upstream.text().catch(() => "");
+      res.write(`data: ${JSON.stringify({ delta: `流畅模式请求失败 (${upstream.status})：${errText.slice(0, 200)}` })}\n\n`);
+      res.write("event: done\ndata: {}\n\n");
+      return res.end();
+    }
+    const reader = upstream.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() || "";
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t.startsWith("data:")) continue;
+        const payload = t.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        let json;
+        try { json = JSON.parse(payload); } catch { continue; }
+        const delta = json.choices?.[0]?.delta?.content;
+        if (delta) {
+          outText += delta;
+          res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+        }
+      }
+    }
+    res.write("event: done\ndata: {}\n\n");
+  } catch (err) {
+    if (err?.name !== "AbortError" && !outText) {
+      res.write(`data: ${JSON.stringify({ delta: `流畅模式出错：${String(err?.message || err).slice(0, 200)}` })}\n\n`);
+    }
+    try { res.write("event: done\ndata: {}\n\n"); } catch {}
+  } finally {
+    try {
+      dbTelemetry.record(session?.userId || "", threadId || "", [], 0, 0, Date.now() - started, outText.slice(0, 80), deepseekModel, 1);
+    } catch {}
+    try { res.end(); } catch {}
+  }
+}
+
 async function chat(req, res) {
   const session = readSession(req);
   const body = await readJson(req, 50 * 1024 * 1024);
   const messages = Array.isArray(body?.messages) ? body.messages.slice(-100) : [];
   const chatThreadId = body?.threadId || null; // for persisting artifacts to SQLite
+  // 流畅模式：走 DeepSeek 官方 API 的快速纯聊天路径（不进 Claude 工具循环）
+  if (body?.mode === "fast") {
+    const fastTemp = Number.isFinite(body?.temperature) ? body.temperature : 0.7;
+    return chatDeepSeek(res, messages, session, chatThreadId, fastTemp);
+  }
   // Build per-user system prompt with long-term memory
   const userMemory = session ? dbMemory.get(session.userId) : "";
   const systemPrompt = buildSystemPrompt(userMemory);

@@ -17,6 +17,7 @@ const state = {
   expectDocument: false,
   webSearchEnabled: false,
   searchQuery: "",
+  fastMode: localStorage.getItem("claude-lite-fast-mode") === "1",
 };
 
 // Migration: move global documents into their threads
@@ -74,6 +75,9 @@ const els = {
   sidebarExpand: document.querySelector("#sidebarExpand"),
   appShell: document.querySelector("#app"),
   webSearchToggle: document.querySelector("#webSearchToggle"),
+  modelPill: document.querySelector("#modelPill"),
+  modelPillLabel: document.querySelector("#modelPillLabel"),
+  modelMenu: document.querySelector("#modelMenu"),
 
 };
 
@@ -116,6 +120,15 @@ document.addEventListener('click', (e) => {
     document.body.classList.remove('sidebar-open');
   }
 });
+
+function updateModelPill() {
+  if (!els.modelPill) return;
+  if (els.modelPillLabel) els.modelPillLabel.textContent = state.fastMode ? "⚡ 流畅模式" : "Claude Opus 4.7";
+  els.modelPill.classList.toggle("fast", state.fastMode);
+  els.modelMenu?.querySelectorAll(".model-option").forEach((opt) => {
+    opt.classList.toggle("active", (opt.dataset.mode === "fast") === state.fastMode);
+  });
+}
 
 function initTheme() {
   const saved = localStorage.getItem("claude-lite-theme");
@@ -213,6 +226,30 @@ function wireEvents() {
     renderDocumentPanel();
   });
   els.sidebarToggle.addEventListener("click", () => document.body.classList.toggle("sidebar-open"));
+
+  // Model / mode switcher — 流畅模式 (DeepSeek) ⇄ Claude
+  updateModelPill();
+  els.modelPill?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const willOpen = els.modelMenu?.classList.contains("hidden");
+    els.modelMenu?.classList.toggle("hidden", !willOpen);
+    els.modelPill.setAttribute("aria-expanded", willOpen ? "true" : "false");
+  });
+  els.modelMenu?.querySelectorAll(".model-option").forEach((opt) => {
+    opt.addEventListener("click", () => {
+      state.fastMode = opt.dataset.mode === "fast";
+      localStorage.setItem("claude-lite-fast-mode", state.fastMode ? "1" : "0");
+      updateModelPill();
+      els.modelMenu.classList.add("hidden");
+      els.modelPill?.setAttribute("aria-expanded", "false");
+    });
+  });
+  document.addEventListener("click", (e) => {
+    if (els.modelMenu && !els.modelMenu.classList.contains("hidden") && !e.target.closest(".model-switch")) {
+      els.modelMenu.classList.add("hidden");
+      els.modelPill?.setAttribute("aria-expanded", "false");
+    }
+  });
 
   // Collapse / expand the left sidebar (desktop), persisted
   if (localStorage.getItem("claude-lite-sidebar-collapsed") === "1") {
@@ -2195,38 +2232,13 @@ function regenerateLastMessage() {
   (async () => {
     try {
       const apiContent = lastUser.content;
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: messagesForApi(thread, apiContent), threadId: thread.id }),
-        signal: state.abortController.signal,
-      });
-      if (!response.ok || !response.body) throw new Error(await response.text());
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
       const assistant = thread.messages.at(-1);
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const sseBlocks = buffer.split(/\r?\n\r?\n/);
-        buffer = sseBlocks.pop() || "";
-        for (const block of sseBlocks) {
-          if (block.startsWith(":")) continue;
-          const lines = block.split(/\r?\n/);
-          let eventType = "";
-          let dataStr = "";
-          for (const l of lines) {
-            if (l.startsWith("event:")) eventType = l.slice(6).trim();
-            else if (l.startsWith("data:")) dataStr = l.slice(5).trim();
-          }
-          if (!dataStr) continue;
-          let data;
-          try { data = JSON.parse(dataStr); } catch { continue; }
-          handleSSEEvent(eventType, data, assistant, thread);
-        }
-      }
+      await streamChatWithRetry(
+        thread,
+        assistant,
+        JSON.stringify({ messages: messagesForApi(thread, apiContent), threadId: thread.id, mode: state.fastMode ? "fast" : undefined }),
+        state.abortController.signal,
+      );
       if (!assistant.toolCalls?.some((t) => t.name === "create_artifact")) {
         if (looksLikeRunnableArtifact(assistant.content)) {
           upsertArtifactFromAssistant(assistant.content, thread);
@@ -2876,6 +2888,74 @@ function stopGeneration() {
   }
 }
 
+// iOS standalone PWAs (added-to-home-screen) intermittently abort an in-flight
+// fetch with a network-level "Load failed" — a known WebKit quirk. Retry such
+// failures transparently. Safe because we only retry while the assistant has
+// produced nothing yet (no risk of duplicated output).
+function isTransientNetworkError(err) {
+  if (!err || err.name === "AbortError") return false;
+  return err instanceof TypeError || /load failed|failed to fetch|network/i.test(String(err.message || ""));
+}
+
+function assistantHasOutput(assistant) {
+  return Boolean((assistant?.content && assistant.content.length) || assistant?.toolCalls?.length);
+}
+
+// One full streaming attempt: connect to /api/chat and pump SSE events into `assistant`.
+async function runChatStream(thread, assistant, bodyJson, signal) {
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: bodyJson,
+    signal,
+    cache: "no-store",
+  });
+  if (!response.ok || !response.body) throw new Error(await response.text());
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const sseBlocks = buffer.split(/\r?\n\r?\n/);
+    buffer = sseBlocks.pop() || "";
+    for (const block of sseBlocks) {
+      if (block.startsWith(":")) continue;
+      const lines = block.split(/\r?\n/);
+      let eventType = "";
+      let dataStr = "";
+      for (const l of lines) {
+        if (l.startsWith("event:")) eventType = l.slice(6).trim();
+        else if (l.startsWith("data:")) dataStr = l.slice(5).trim();
+      }
+      if (!dataStr) continue;
+      let data;
+      try { data = JSON.parse(dataStr); } catch { continue; }
+      handleSSEEvent(eventType, data, assistant, thread);
+    }
+  }
+}
+
+// Stream the chat reply, auto-retrying the connection on transient network
+// failures as long as nothing has been emitted yet.
+async function streamChatWithRetry(thread, assistant, bodyJson, signal) {
+  const maxRetries = 2;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await runChatStream(thread, assistant, bodyJson, signal);
+      return;
+    } catch (err) {
+      if (isTransientNetworkError(err) && !assistantHasOutput(assistant) && attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 450 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function send(event) {
   if (event) event.preventDefault();
   if (state.streaming) return;
@@ -2902,42 +2982,13 @@ async function send(event) {
   render();
 
   try {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ messages: messagesForApi(thread, apiContent), threadId: thread.id }),
-      signal: state.abortController.signal,
-    });
-    if (!response.ok || !response.body) throw new Error(await response.text());
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
     const assistant = thread.messages.at(-1);
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const sseBlocks = buffer.split(/\r?\n\r?\n/);
-      buffer = sseBlocks.pop() || "";
-      for (const block of sseBlocks) {
-        if (block.startsWith(":")) continue;
-        const lines = block.split(/\r?\n/);
-        let eventType = "";
-        let dataStr = "";
-        for (const l of lines) {
-          if (l.startsWith("event:")) eventType = l.slice(6).trim();
-          else if (l.startsWith("data:")) dataStr = l.slice(5).trim();
-        }
-        if (!dataStr) continue;
-
-        let data;
-        try { data = JSON.parse(dataStr); } catch { continue; }
-
-        handleSSEEvent(eventType, data, assistant, thread);
-      }
-    }
+    await streamChatWithRetry(
+      thread,
+      assistant,
+      JSON.stringify({ messages: messagesForApi(thread, apiContent), threadId: thread.id, mode: state.fastMode ? "fast" : undefined }),
+      state.abortController.signal,
+    );
     // Only detect inline HTML artifacts as fallback (e.g. model outputs raw HTML without tool)
     if (!assistant.toolCalls?.some((t) => t.name === "create_artifact")) {
       if (looksLikeRunnableArtifact(assistant.content)) {
