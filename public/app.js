@@ -1160,7 +1160,14 @@ async function showChat() {
     console.warn("[Sync] Failed to load threads from server, using local cache:", e.message);
   }
   if (!state.threads.length) createThread();
-  state.activeId ||= state.threads[0].id;
+  // Always open on a fresh conversation (not the last one). Reuse an existing
+  // unused blank thread so repeated opens don't pile up empty "新对话".
+  const topThread = state.threads[0];
+  if (topThread && topThread.title === "新对话" && !(topThread.messages && topThread.messages.length)) {
+    state.activeId = topThread.id;
+  } else {
+    createThread();
+  }
   render();
   // Load messages for active thread (force reload to pick up ratings)
   await loadThreadData(state.activeId, true);
