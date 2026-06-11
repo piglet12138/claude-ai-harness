@@ -11,7 +11,7 @@
     <link rel="apple-touch-icon" sizes="167x167" href="/icons/167.png" />
     <link rel="apple-touch-icon" sizes="152x152" href="/icons/152.png" />
     <link rel="apple-touch-icon" sizes="120x120" href="/icons/120.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260611-ember2" />
+    <link rel="stylesheet" href="/styles.css?v=20260611-ember3" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous" />
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
       <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -25,6 +25,9 @@
         <div class="brand">
           <img class="brand-logo" src="/logo.svg" alt="" width="28" height="28" />
           <span>Claude</span>
+          <button id="sidebarCollapse" class="rail-collapse-btn" type="button" title="收起侧栏" aria-label="收起侧栏">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+          </button>
         </div>
         <button id="newChat" class="primary-nav" type="button">
           <span class="icon plus" aria-hidden="true"></span>
@@ -53,6 +56,9 @@
         <header class="topbar">
           <button id="sidebarToggle" class="icon-button mobile-only" type="button" aria-label="切换侧栏">
             <span class="icon menu" aria-hidden="true"></span>
+          </button>
+          <button id="sidebarExpand" class="icon-button sidebar-expand-btn" type="button" title="展开侧栏" aria-label="展开侧栏">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
           </button>
           <div>
             <div class="model-pill">Claude Opus 4.7</div>
@@ -172,9 +178,14 @@
 
           <aside id="docPanel" class="doc-panel collapsed" aria-label="文档预览">
             <div class="doc-panel-header">
-              <div>
-                <strong id="docTitle">Artifact</strong>
-                <span id="docMeta">需要时自动生成</span>
+              <div class="doc-head-left">
+                <button id="docBackBtn" class="doc-back-btn hidden" type="button" title="返回文档列表" aria-label="返回文档列表">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <div>
+                  <strong id="docTitle">文档</strong>
+                  <span id="docMeta">需要时自动生成</span>
+                </div>
               </div>
               <div class="doc-actions">
                 <button id="shareDoc" class="ghost-button" type="button">分享</button>
@@ -204,7 +215,7 @@
       <a href="/terms.html">Terms of Service</a>
     </footer>
     <script>navigator.serviceWorker?.register('/sw.js').catch(() => {})</script>
-    <script src="/app.js?v=20260611-ember2" type="module"></script>
+    <script src="/app.js?v=20260611-ember3" type="module"></script>
     <script>
     (function(){
       if(navigator.doNotTrack==="1")return;

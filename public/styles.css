@@ -4428,3 +4428,144 @@ img.brand-logo.large {
   .chat-column.welcome { padding: 16px 10px 24px; }
   .chat-column.welcome .greeting { font-size: clamp(26px, 7vw, 34px); }
 }
+
+/* ============================================================
+   Ember side-panel pass — wider sidebar + collapse toggle,
+   right doc panel as a card list (empty/list/detail states).
+   ============================================================ */
+
+/* Wider left sidebar */
+.app-shell { grid-template-columns: 300px minmax(0, 1fr); }
+
+/* Collapse button in the rail header */
+.rail-collapse-btn {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: var(--faint);
+  background: transparent;
+  transition: background 0.12s, color 0.12s;
+}
+.rail-collapse-btn:hover { background: rgba(128, 128, 128, 0.1); color: var(--ink); }
+
+/* Expand button lives in the topbar, only shown while collapsed */
+.sidebar-expand-btn { display: none; }
+
+@media (min-width: 881px) {
+  .app-shell.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .app-shell.sidebar-collapsed .sidebar { display: none; }
+  .app-shell.sidebar-collapsed .sidebar-expand-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+/* Roomier sidebar typography to match the wider rail */
+.thread-label { font-size: 13.5px; }
+.rail-item, .primary-nav { font-size: 14.5px; }
+
+/* Cap the right doc panel so it never dominates the screen */
+.chat-view { grid-template-columns: minmax(0, 1fr) minmax(360px, 460px); }
+
+/* List mode: hide per-document actions, keep only close */
+.doc-panel.list-mode .doc-actions > :not(#closeDocPanel) { display: none; }
+.doc-head-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.doc-back-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  transition: background 0.12s, color 0.12s;
+}
+.doc-back-btn:hover { background: rgba(128, 128, 128, 0.1); color: var(--ink); }
+.doc-back-btn.hidden { display: none; }
+
+/* Document card list */
+.doc-preview.doc-list { padding: 16px 14px; }
+.doc-card-list { display: flex; flex-direction: column; gap: 10px; }
+.doc-card-group-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  text-transform: uppercase;
+  margin: 2px 2px 2px;
+}
+.doc-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 13px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.doc-card:hover { border-color: var(--accent-soft); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+.doc-card.active { border-color: var(--accent); }
+.doc-card-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 19px;
+}
+.doc-card-body { min-width: 0; flex: 1; line-height: 1.35; }
+.doc-card-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-card-sub { display: block; font-size: 12px; color: var(--faint); margin-top: 1px; }
+.doc-card-dl {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  transition: background 0.12s, color 0.12s;
+}
+.doc-card-dl:hover { background: var(--accent-soft); color: var(--accent-ink); }
+
+/* Document empty state — centered */
+.doc-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px;
+  gap: 4px;
+}
+.doc-empty-icon {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--accent-soft);
+  font-size: 26px;
+  margin-bottom: 10px;
+}
+.doc-empty-title { font-size: 15px; font-weight: 600; color: var(--ink); }
+.doc-empty-hint { font-size: 13px; color: var(--faint); line-height: 1.5; max-width: 240px; }

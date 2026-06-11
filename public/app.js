@@ -12,6 +12,7 @@ const state = {
   streaming: false,
   abortController: null,
   docOpen: false,
+  docListMode: false,
   docAutoOpenSuppressedThreadId: "",
   expectDocument: false,
   webSearchEnabled: false,
@@ -64,10 +65,14 @@ const els = {
   docMeta: document.querySelector("#docMeta"),
   docPreview: document.querySelector("#docPreview"),
   closeDocPanel: document.querySelector("#closeDocPanel"),
+  docBackBtn: document.querySelector("#docBackBtn"),
   toggleDocPanel: document.querySelector("#toggleDocPanel"),
   artifactPreviewTab: document.querySelector("#artifactPreviewTab"),
   artifactSourceTab: document.querySelector("#artifactSourceTab"),
   sidebarToggle: document.querySelector("#sidebarToggle"),
+  sidebarCollapse: document.querySelector("#sidebarCollapse"),
+  sidebarExpand: document.querySelector("#sidebarExpand"),
+  appShell: document.querySelector("#app"),
   webSearchToggle: document.querySelector("#webSearchToggle"),
 
 };
@@ -197,13 +202,30 @@ function wireEvents() {
   });
   els.toggleDocPanel.addEventListener("click", () => {
     state.docOpen = !state.docOpen;
-    if (state.docOpen) state.docAutoOpenSuppressedThreadId = "";
+    if (state.docOpen) { state.docAutoOpenSuppressedThreadId = ""; state.docListMode = true; }
     else state.docAutoOpenSuppressedThreadId = state.activeId;
-    if (state.docOpen && !state.activeDocId && threadDocuments()[0]) state.activeDocId = threadDocuments()[0].id;
     renderDocumentPanel();
     renderDocFab();
   });
+  // Back from a document's preview to the document card list
+  els.docBackBtn?.addEventListener("click", () => {
+    state.docListMode = true;
+    renderDocumentPanel();
+  });
   els.sidebarToggle.addEventListener("click", () => document.body.classList.toggle("sidebar-open"));
+
+  // Collapse / expand the left sidebar (desktop), persisted
+  if (localStorage.getItem("claude-lite-sidebar-collapsed") === "1") {
+    els.appShell?.classList.add("sidebar-collapsed");
+  }
+  els.sidebarCollapse?.addEventListener("click", () => {
+    els.appShell?.classList.add("sidebar-collapsed");
+    localStorage.setItem("claude-lite-sidebar-collapsed", "1");
+  });
+  els.sidebarExpand?.addEventListener("click", () => {
+    els.appShell?.classList.remove("sidebar-collapsed");
+    localStorage.setItem("claude-lite-sidebar-collapsed", "0");
+  });
 
   els.prompt.addEventListener("input", updateSendButton);
   initScrollBottomBtn();
@@ -1355,6 +1377,7 @@ function renderDocFab() {
     fab.setAttribute("aria-label", "打开文档");
     fab.addEventListener("click", () => {
       state.docOpen = true;
+      state.docListMode = false;
       if (!state.activeDocId && docs[0]) state.activeDocId = docs[0].id;
       render();
     });
@@ -1747,6 +1770,7 @@ function renderDocuments() {
       if (e.target.closest(".thread-more-btn")) return;
       state.activeDocId = doc.id;
       state.docOpen = true;
+      state.docListMode = false;
       state.docAutoOpenSuppressedThreadId = "";
       document.body.classList.remove("sidebar-open");
       render();
@@ -2403,6 +2427,7 @@ function renderToolCard(tc) {
   if (isClickable) {
     card.addEventListener("click", () => {
       state.docOpen = true;
+      state.docListMode = false;
       state.docAutoOpenSuppressedThreadId = "";
       renderDocumentPanel();
     });
@@ -2550,17 +2575,92 @@ function updateStreamingMessage(assistant) {
   }
 }
 
+function removeDocTabs() {
+  document.querySelector(".doc-tabs")?.remove();
+}
+
+function docTypeIcon(doc) {
+  if (doc.type === "file") return { docx: "📄", xlsx: "📊", pptx: "📽", pdf: "📕", csv: "📋", zip: "📦" }[doc.language] || "📁";
+  if (doc.type === "html") return "🌐";
+  if (doc.type === "code") return "💻";
+  return "📄";
+}
+
+function docTypeLabel(doc) {
+  if (doc.type === "file") return `${(doc.language || doc.filePath?.split(".").pop() || "文件").toUpperCase()} 文件`;
+  if (doc.type === "html") return "HTML · 网页";
+  if (doc.type === "code") return `${(doc.language || "code").toUpperCase()} 代码`;
+  return "Document · 文档";
+}
+
+// Card-list view of all documents generated in this thread
+function renderDocCardList(docs) {
+  const wrap = document.createElement("div");
+  wrap.className = "doc-card-list";
+  const label = document.createElement("div");
+  label.className = "doc-card-group-label";
+  label.textContent = "本次对话生成";
+  wrap.append(label);
+  for (const doc of docs) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "doc-card" + (doc.id === state.activeDocId ? " active" : "");
+    card.innerHTML = `<span class="doc-card-icon">${docTypeIcon(doc)}</span>
+      <span class="doc-card-body">
+        <span class="doc-card-title">${escapeHtml(doc.title || "文档")}</span>
+        <span class="doc-card-sub">${escapeHtml(docTypeLabel(doc))}</span>
+      </span>`;
+    if (doc.type === "file" && doc.fileId) {
+      const dl = document.createElement("a");
+      dl.className = "doc-card-dl";
+      dl.href = `/api/files/${doc.fileId}`;
+      dl.download = doc.title || "file";
+      dl.title = "下载";
+      dl.setAttribute("aria-label", "下载");
+      dl.innerHTML = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><polyline points="7 10 12 15 17 10"/><path d="M4 20h16"/></svg>`;
+      dl.addEventListener("click", (e) => e.stopPropagation());
+      card.append(dl);
+    }
+    card.addEventListener("click", () => {
+      state.activeDocId = doc.id;
+      state.docListMode = false;
+      renderDocumentPanel();
+    });
+    wrap.append(card);
+  }
+  return wrap;
+}
+
 function renderDocumentPanel() {
   els.chatView.classList.toggle("doc-closed", !state.docOpen);
   els.docPanel.classList.toggle("collapsed", !state.docOpen);
-  renderDocTabs();
-  const doc = activeDocument();
-  if (!doc) {
+  if (!state.docOpen) return;
+  const docs = threadDocuments();
+  const activeExists = state.activeDocId && docs.some(d => d.id === state.activeDocId);
+  const showList = docs.length === 0 || state.docListMode || !activeExists;
+  els.docPanel.classList.toggle("list-mode", showList);
+  els.docBackBtn?.classList.toggle("hidden", showList);
+  if (showList) {
+    removeDocTabs();
     els.docTitle.textContent = "文档";
-    els.docMeta.textContent = "需要时自动生成";
-    els.docPreview.innerHTML = `<p class="empty-doc">当对话生成文档时，会在这里打开精排预览。</p>`;
+    if (docs.length === 0) {
+      els.docMeta.textContent = "需要时自动生成";
+      els.docPreview.className = "doc-preview";
+      els.docPreview.innerHTML = `<div class="doc-empty">
+        <div class="doc-empty-icon">📄</div>
+        <div class="doc-empty-title">还没有生成文档</div>
+        <div class="doc-empty-hint">在对话里让我写文档、做表格或写代码，成稿会作为卡片出现在这里。</div>
+      </div>`;
+    } else {
+      els.docMeta.textContent = `${docs.length} 个文档`;
+      els.docPreview.className = "doc-preview doc-list";
+      els.docPreview.innerHTML = "";
+      els.docPreview.append(renderDocCardList(docs));
+    }
     return;
   }
+  removeDocTabs();
+  const doc = activeDocument();
   doc.type ||= "document";
   doc.language ||= doc.type === "html" ? "html" : "markdown";
   doc.view ||= defaultArtifactView(doc);
@@ -3050,6 +3150,7 @@ function upsertArtifactFromTool(data, thread) {
     thread.documents.unshift(payload);
   }
   state.activeDocId = payload.id;
+  state.docListMode = false;
   if (state.docAutoOpenSuppressedThreadId !== thread.id) {
     state.docOpen = true;
   }
@@ -3075,6 +3176,7 @@ function upsertArtifactFromAssistant(content, thread) {
   };
   thread.documents.unshift(payload);
   state.activeDocId = payload.id;
+  state.docListMode = false;
   if (state.docAutoOpenSuppressedThreadId !== thread.id) {
     state.docOpen = true;
   }
