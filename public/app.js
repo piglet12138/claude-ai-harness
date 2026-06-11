@@ -1216,6 +1216,24 @@ async function migrateLocalToServer() {
   }
 }
 
+// Normalize a message's content to the plain string the UI expects.
+// Normal messages store content as a string, but shared/forked threads store it
+// as an array of blocks ([{type:"text",text}, {type:"placeholder",text}, ...]).
+// Without this, renderUserMessage()'s `.trim()` throws on arrays and blanks the page.
+function messageContentToText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map(b => {
+        if (typeof b === "string") return b;
+        if (b && (b.type === "text" || b.type === "placeholder")) return b.text || "";
+        return "";
+      })
+      .join("");
+  }
+  return content == null ? "" : String(content);
+}
+
 async function loadThreadData(threadId, forceReload) {
   const thread = state.threads.find(t => t.id === threadId);
   if (!thread) return;
@@ -1230,7 +1248,7 @@ async function loadThreadData(threadId, forceReload) {
     const mappedServer = serverMessages.map(m => ({
       id: m.id,
       role: m.role,
-      content: m.content,
+      content: messageContentToText(m.content),
       toolCalls: m.toolCalls,
       _feedback: ratingMap.has(m.id) ? (ratingMap.get(m.id) === 1 ? "up" : "down") : null,
     }));
