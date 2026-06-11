@@ -11,7 +11,7 @@
     <link rel="apple-touch-icon" sizes="167x167" href="/icons/167.png" />
     <link rel="apple-touch-icon" sizes="152x152" href="/icons/152.png" />
     <link rel="apple-touch-icon" sizes="120x120" href="/icons/120.png" />
-    <link rel="stylesheet" href="/styles.css?v=20260611-ember" />
+    <link rel="stylesheet" href="/styles.css?v=20260611-ember2" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous" />
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
       <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -111,6 +111,26 @@
           <div class="chat-column">
             <section id="hero" class="hero">
               <h1 id="heroGreeting" class="greeting">今天想 <span class="accent">聊点什么</span>？</h1>
+            </section>
+
+            <div id="messages" class="messages" aria-live="polite"></div>
+
+            <form id="composer" class="composer">
+              <div id="attachmentBar" class="attachment-bar"></div>
+              <textarea id="prompt" rows="1" placeholder="发消息给 Claude"></textarea>
+              <div class="composer-actions">
+                <label class="tool-button" title="上传文本或 Google Docs 导出的 HTML">
+                  <input id="fileInput" type="file" multiple accept="image/*,.heic,.heif,.txt,.md,.markdown,.csv,.json,.html,.htm,.xml,.log,.yaml,.yml,.docx,.pdf,.xlsx,.xls" />
+                  <span class="icon attach" aria-hidden="true"></span>
+                </label>
+                <button id="send" class="send-button" type="submit" aria-label="发送">
+                  <span class="icon arrow-up" aria-hidden="true"></span>
+                </button>
+              </div>
+            </form>
+
+            <div id="heroExtras" class="hero-extras">
+              <p class="hero-disclaimer">Claude 可能会出错，请核实重要信息。</p>
               <div class="starter-grid">
                 <button class="starter" data-prompt="请帮我起草一份高质量文档。先给完整成稿，结构包含背景、目标、核心内容、风险和下一步。主题是：">
                   <span class="pc-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>
@@ -147,23 +167,7 @@
                 <button class="hero-pill" data-prompt="把下面这段内容翻译成地道的英文：\n\n">翻译成英文</button>
                 <button class="hero-pill" data-prompt="帮我把下面的内容总结成要点：\n\n">总结要点</button>
               </div>
-            </section>
-
-            <div id="messages" class="messages" aria-live="polite"></div>
-
-            <form id="composer" class="composer">
-              <div id="attachmentBar" class="attachment-bar"></div>
-              <textarea id="prompt" rows="1" placeholder="发消息给 Claude"></textarea>
-              <div class="composer-actions">
-                <label class="tool-button" title="上传文本或 Google Docs 导出的 HTML">
-                  <input id="fileInput" type="file" multiple accept="image/*,.heic,.heif,.txt,.md,.markdown,.csv,.json,.html,.htm,.xml,.log,.yaml,.yml,.docx,.pdf,.xlsx,.xls" />
-                  <span class="icon attach" aria-hidden="true"></span>
-                </label>
-                <button id="send" class="send-button" type="submit" aria-label="发送">
-                  <span class="icon arrow-up" aria-hidden="true"></span>
-                </button>
-              </div>
-            </form>
+            </div>
           </div>
 
           <aside id="docPanel" class="doc-panel collapsed" aria-label="文档预览">
@@ -200,7 +204,7 @@
       <a href="/terms.html">Terms of Service</a>
     </footer>
     <script>navigator.serviceWorker?.register('/sw.js').catch(() => {})</script>
-    <script src="/app.js?v=20260611-ember" type="module"></script>
+    <script src="/app.js?v=20260611-ember2" type="module"></script>
     <script>
     (function(){
       if(navigator.doNotTrack==="1")return;
