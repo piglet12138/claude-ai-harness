@@ -867,6 +867,42 @@ img.brand-logo.large {
   margin-top: 12px;
 }
 
+/* Donate / tip (支持 settings tab) */
+.donate-qr {
+  display: grid;
+  place-items: center;
+  margin-top: 4px;
+}
+
+.donate-qr-img {
+  width: 240px;
+  max-width: 100%;
+  height: auto;
+  border-radius: 10px;
+}
+
+.donate-qr-placeholder {
+  width: 240px;
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  text-align: center;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--paper);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+}
+
+.donate-thanks {
+  margin: 14px 0 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .bug-cancel,
 .bug-submit {
   border: 0;

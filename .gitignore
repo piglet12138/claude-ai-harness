@@ -30,3 +30,7 @@ test-results/
 users.json
 bug-reports.json
 data.db*
+
+# Personal payment QR codes — keep OUT of the public repo; deliver to server out-of-band
+public/donate/*.png
+public/donate/*.jpg

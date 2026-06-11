@@ -475,6 +475,22 @@ function showBugReportModal() {
   });
 }
 
+function renderSupportTabContent(container) {
+  container.innerHTML = `
+    <p class="settings-tab-desc">这是我个人自费维护的免费服务。如果它帮到了你，欢迎用支付宝随意打赏——完全自愿，金额随心。</p>
+    <div class="donate-qr">
+      <img class="donate-qr-img" src="/donate/alipay.png" alt="支付宝收款码" />
+    </div>
+    <p class="donate-thanks">谢谢你的支持 🙏</p>`;
+  const img = container.querySelector(".donate-qr-img");
+  img.addEventListener("error", () => {
+    const ph = document.createElement("div");
+    ph.className = "donate-qr-placeholder";
+    ph.textContent = "收款码待上传：public/donate/alipay.png";
+    img.replaceWith(ph);
+  });
+}
+
 async function showMemoryModal() {
   document.querySelector(".memory-modal")?.remove();
   const modal = document.createElement("div");
@@ -714,6 +730,7 @@ async function showSettingsModal(defaultTab = "memory") {
         <button class="settings-tab" data-tab="mydata" role="tab">我的数据</button>
         <button class="settings-tab" data-tab="shares" role="tab">我的分享</button>
         <button class="settings-tab" data-tab="about" role="tab">关于</button>
+        <button class="settings-tab" data-tab="support" role="tab">支持</button>
       </div>
       <div class="settings-content" id="settingsContent"></div>
     </div>`;
@@ -728,7 +745,8 @@ async function showSettingsModal(defaultTab = "memory") {
     if (tabName === "memory") await renderMemoryTabContent(content);
     else if (tabName === "mydata") await renderMyDataTabContent(content);
     else if (tabName === "shares") await renderSharesTabContent(content);
-    else renderAboutTabContent(content);
+    else if (tabName === "about") renderAboutTabContent(content);
+    else renderSupportTabContent(content);
   }
 
   tabs.forEach(tab => tab.addEventListener("click", () => switchTab(tab.dataset.tab)));
