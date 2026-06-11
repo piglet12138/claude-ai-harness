@@ -246,6 +246,57 @@
       <div class="timeline">
 
         <div class="entry highlight">
+          <div class="entry-date">2026-06-11</div>
+          <div class="entry-title">
+            <span class="tag tag-feat">feat</span>
+            <span class="zh">⚡ 流畅模式 —— DeepSeek 官方 API，快速稳定</span>
+            <span class="en">⚡ Smooth Mode — DeepSeek official API, fast and stable</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">顶栏点模型名字即可在「Claude Opus 4.7」和「⚡ 流畅模式」之间切换。流畅模式走 <strong>DeepSeek 官方 API</strong>（OpenAI 兼容），国内访问又快又稳，适合日常快速问答 —— 纯文本聊天、秒回、几乎不掉线。需要联网搜索 / 文档 / 代码等重功能时切回 Claude。选择会记住。</span>
+            <span class="en">Tap the model name in the top bar to switch between "Claude Opus 4.7" and "⚡ Smooth Mode". Smooth Mode runs on <strong>DeepSeek's official API</strong> (OpenAI-compatible) — fast and reliable, ideal for quick everyday Q&amp;A: plain-text chat, near-instant replies, rarely drops. Switch back to Claude when you need web search / documents / code tools. Your choice is remembered.</span>
+          </div>
+        </div>
+
+        <div class="entry highlight">
+          <div class="entry-date">2026-06-11</div>
+          <div class="entry-title">
+            <span class="tag tag-feat">feat</span>
+            <span class="zh">等待回复时的动态状态提示</span>
+            <span class="en">Live status while waiting for a reply</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">发出消息后、第一个字到达前不再是一片空白。现在会显示「✶ 正在思考…」的流光动画（短语会轮换），模型在联网 / 读网页 / 写文档时实时切换成「正在搜索…」「正在阅读…」「正在撰写…」，正文开始流式输出后自动消失。参考 Claude Code / Claude.ai 的等待反馈。</span>
+            <span class="en">After you send a message, the gap before the first token is no longer dead air. A shimmering "✶ Thinking…" indicator now shows (the phrase cycles), switching live to "Searching…" / "Reading…" / "Writing…" while the agent runs a tool, and vanishing once prose starts streaming. Inspired by Claude Code / Claude.ai.</span>
+          </div>
+        </div>
+
+        <div class="entry">
+          <div class="entry-date">2026-06-11</div>
+          <div class="entry-title">
+            <span class="tag tag-fix">fix</span>
+            <span class="zh">移动端 &amp; iOS PWA 体验一揽子修复</span>
+            <span class="en">Mobile &amp; iOS PWA experience — a batch of fixes</span>
+          </div>
+          <div class="entry-body">
+            <span class="zh">围绕手机和"添加到主屏幕"的体验补齐：
+              <ul>
+                <li><strong>右侧"空气墙"空白</strong>：侧栏在手机上是抽屉，却仍占着一条 300px 网格轨道把内容挤到左边、右侧大片留白 —— 现已恢复单列满宽（720–1020px 宽度最明显）。</li>
+                <li><strong>iOS 主屏 App 间歇性 "Load failed"</strong>：聊天请求遇到 WebKit 这个网络坑时自动重连最多 2 次，对用户透明。</li>
+                <li><strong>主屏图标满铺铜色</strong>：修了 Android 自适应图标被裁后缩水发灰、iOS 圆角留米色边框的问题。</li>
+                <li><strong>iOS 安装图文引导页</strong>（<a href="/ios-install.html">/ios-install.html</a>）：内嵌二维码 + 添加到主屏幕步骤，方便分享给 iPhone 用户。</li>
+              </ul></span>
+            <span class="en">Polishing the phone and "Add to Home Screen" experience:
+              <ul>
+                <li><strong>Right-side blank "wall"</strong>: the sidebar is a drawer on phones but still reserved a 300px grid track, squishing content left with a big blank on the right — now single-column full width (most visible at 720–1020px).</li>
+                <li><strong>Intermittent "Load failed" in the iOS home-screen app</strong>: chat requests now auto-retry up to twice on this WebKit network quirk, transparently.</li>
+                <li><strong>Full-bleed home-screen icons</strong>: fixed Android adaptive-icon shrinkage/greying after masking and the iOS cream border after rounding.</li>
+                <li><strong>iOS install guide page</strong> (<a href="/ios-install.html">/ios-install.html</a>): embedded QR code + add-to-home-screen steps to share with iPhone users.</li>
+              </ul></span>
+          </div>
+        </div>
+
+        <div class="entry highlight">
           <div class="entry-date">2026-06-10</div>
           <div class="entry-title">
             <span class="tag tag-perf">perf</span>
