@@ -4477,7 +4477,7 @@ img.brand-logo.large {
    On mobile the doc panel is a full-screen overlay; the chat must stay single
    column (see @media(max-width:1020px)). */
 @media (min-width: 1021px) {
-  .chat-view { grid-template-columns: minmax(0, 1fr) minmax(360px, 460px); }
+  .chat-view { grid-template-columns: minmax(0, 1fr) minmax(460px, 40vw); }
 }
 
 /* List mode: hide per-document actions, keep only close */
