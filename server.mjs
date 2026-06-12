@@ -15,6 +15,7 @@ import { callHaiku, summarizeWithHaiku, extractRelevant, callClaude } from "./li
 import { multiSearch, braveSearch, fetchPageText } from "./tools/web.mjs";
 import { executeGenerateLongDoc, markdownToDocx, safeDocFilename } from "./skills/docx/index.mjs";
 import { executeCode } from "./tools/code-exec.mjs";
+import { readJson, readBuffer, json, html, notFound } from "./lib/http.mjs";
 const XLSX = require("xlsx");
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TableRow, TableCell, Table, WidthType, BorderStyle, PageBreak } = require("docx");
 
@@ -2288,31 +2289,6 @@ setInterval(() => {
   for (const [ip, record] of loginAttempts) { if (record.resetAt < now) loginAttempts.delete(ip); }
 }, 3600_000);
 
-async function readJson(req, maxBytes) {
-  const buffer = await readBuffer(req, maxBytes);
-  return JSON.parse(buffer.toString("utf8") || "{}");
-}
-
-async function readBuffer(req, maxBytes) {
-  const chunks = [];
-  let total = 0;
-  for await (const chunk of req) {
-    total += chunk.length;
-    if (total > maxBytes) throw new Error("Request body too large");
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
-
-function json(res, body, status = 200) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-  res.end(JSON.stringify(body));
-}
-
-function html(res, body, status = 200) {
-  res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-  res.end(body);
-}
 
 function wrapDocxHtml(fragment, title) {
   const body = String(fragment || "").trim() || "<p>这个文档没有可提取的正文内容。</p>";
@@ -2442,10 +2418,6 @@ function safeDriveName(name) {
   return String(name || "Untitled document").replace(/[\\/:*?"<>|]+/g, "-").slice(0, 120);
 }
 
-function notFound(res) {
-  res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-  res.end("Not found");
-}
 
 
 
