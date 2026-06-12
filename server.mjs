@@ -3,55 +3,22 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { mkdir } from "node:fs/promises";
+// (top-level mkdir import removed — its only top-level use moved to lib/state.mjs)
 import { fileURLToPath } from "node:url";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage, dbRatings, dbPv, dbTelemetry, dbToolResultSummary, dbMemory, dbUserData, dbShares } from "./db.mjs";
+import { fileStore, longDocJobs, FILES_DIR } from "./lib/state.mjs";
 const XLSX = require("xlsx");
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TableRow, TableCell, Table, WidthType, BorderStyle, PageBreak } = require("docx");
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
 
-// Generated file store (metadata persisted as .meta.json sidecar files)
-const fileStore = new Map();
-const FILES_DIR = path.join(root, ".generated-files");
-await mkdir(FILES_DIR, { recursive: true }).catch(() => {});
-// Restore fileStore from sidecar metadata on startup
-try {
-  const entries = await fs.readdir(FILES_DIR);
-  for (const f of entries) {
-    if (!f.endsWith(".meta.json")) continue;
-    try {
-      const meta = JSON.parse(await fs.readFile(path.join(FILES_DIR, f), "utf8"));
-      if (Date.now() > meta.expires) {
-        fs.unlink(path.join(FILES_DIR, f)).catch(() => {});
-        fs.unlink(meta.filePath).catch(() => {});
-      } else {
-        fileStore.set(meta.id, meta);
-      }
-    } catch {}
-  }
-  if (fileStore.size) console.log(`[Files] Restored ${fileStore.size} file(s) from disk`);
-} catch {}
-// Long document background jobs (in-memory, expire after 2h)
-const longDocJobs = new Map();
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, entry] of fileStore) {
-    if (now > entry.expires) {
-      fs.unlink(entry.filePath).catch(() => {});
-      fs.unlink(path.join(FILES_DIR, `${id}.meta.json`)).catch(() => {});
-      fileStore.delete(id);
-    }
-  }
-  for (const [id, job] of longDocJobs) {
-    if (now - job.createdAt > 7200_000) longDocJobs.delete(id);
-  }
-}, 3600_000);
+// Shared runtime state (fileStore / longDocJobs / FILES_DIR + startup restore +
+// TTL cleanup) extracted to lib/state.mjs. Imported here as singletons.
 const env = await loadEnv(path.join(root, ".env"));
 const port = Number(env.PORT || process.env.PORT || 3040);
 const baseUrl = process.env.ANTHROPIC_BASE_URL || env.ANTHROPIC_BASE_URL || "https://api.anthropic.com/v1";
