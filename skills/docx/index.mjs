@@ -14,7 +14,11 @@ import { delay } from "../../lib/util.mjs";
 
 const require = createRequire(import.meta.url);
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
-        TableRow, TableCell, Table, WidthType, BorderStyle } = require("docx");
+        TableRow, TableCell, Table, WidthType, BorderStyle, Header, Footer,
+        PageNumber, ShadingType, LevelFormat } = require("docx");
+
+// US Letter content width in DXA (12240 page − 2×1440 margins). Used for DXA table widths.
+const CONTENT_WIDTH_DXA = 9360;
 
 export { Packer };
 
@@ -375,7 +379,7 @@ export function markdownToDocx(title, markdown) {
     if (/^[-*]\s+/.test(line)) {
       children.push(new Paragraph({
         children: parseInlineFormatting(line.replace(/^[-*]\s+/, "")),
-        bullet: { level: 0 },
+        numbering: { reference: "bullets", level: 0 },
         spacing: { before: 40, after: 40 },
       }));
       continue;
@@ -400,18 +404,32 @@ export function markdownToDocx(title, markdown) {
       i--;
       const tableRows = tableLines.filter((_, idx) => idx !== 1); // skip separator
       if (tableRows.length) {
+        // DXA dual widths (table + columnWidths + per-cell width) — PERCENTAGE breaks in Google Docs.
+        const colCount = Math.max(1, tableRows[0].replace(/^\||\|$/g, "").split("|").length);
+        const colW = Math.floor(CONTENT_WIDTH_DXA / colCount);
+        const tableW = colW * colCount;
+        const cellBorder = { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" };
+        const cellBorders = { top: cellBorder, bottom: cellBorder, left: cellBorder, right: cellBorder };
         const rows = tableRows.map((row, rowIdx) => {
           const cells = row.replace(/^\||\|$/g, "").split("|").map(c => c.trim());
           return new TableRow({
             children: cells.map(cell => new TableCell({
+              borders: cellBorders,
+              width: { size: colW, type: WidthType.DXA },
+              margins: { top: 80, bottom: 80, left: 120, right: 120 }, // readable cell padding
+              // CLEAR (not SOLID) shading prevents black backgrounds; header row only.
+              ...(rowIdx === 0 ? { shading: { fill: "D5E8F0", type: ShadingType.CLEAR } } : {}),
               children: [new Paragraph({
                 children: [new TextRun({ text: cell, bold: rowIdx === 0, size: 20 })],
               })],
-              width: { size: Math.floor(100 / cells.length), type: WidthType.PERCENTAGE },
             })),
           });
         });
-        children.push(new Table({ rows, width: { size: 100, type: WidthType.PERCENTAGE } }));
+        children.push(new Table({
+          rows,
+          width: { size: tableW, type: WidthType.DXA },
+          columnWidths: Array.from({ length: colCount }, () => colW),
+        }));
       }
       continue;
     }
@@ -427,18 +445,52 @@ export function markdownToDocx(title, markdown) {
   }
 
   return new Document({
+    // Arial default + built-in heading style overrides (exact IDs) with outlineLevel for TOC/nav.
+    styles: {
+      default: { document: { run: { font: "Arial", size: 22 } } },
+      paragraphStyles: [
+        { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true,
+          run: { size: 32, bold: true, font: "Arial" },
+          paragraph: { spacing: { before: 240, after: 120 }, outlineLevel: 0 } },
+        { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", quickFormat: true,
+          run: { size: 28, bold: true, font: "Arial" },
+          paragraph: { spacing: { before: 200, after: 100 }, outlineLevel: 1 } },
+        { id: "Heading3", name: "Heading 3", basedOn: "Normal", next: "Normal", quickFormat: true,
+          run: { size: 24, bold: true, font: "Arial" },
+          paragraph: { spacing: { before: 160, after: 80 }, outlineLevel: 2 } },
+      ],
+    },
     numbering: {
-      config: [{
-        reference: "default-numbering",
-        levels: [{
-          level: 0, format: "decimal", text: "%1.", alignment: AlignmentType.LEFT,
-          style: { paragraph: { indent: { left: 720, hanging: 360 } } },
-        }],
-      }],
+      config: [
+        { reference: "bullets",
+          levels: [{ level: 0, format: LevelFormat.BULLET, text: "•", alignment: AlignmentType.LEFT,
+            style: { paragraph: { indent: { left: 720, hanging: 360 } } } }] },
+        { reference: "default-numbering",
+          levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT,
+            style: { paragraph: { indent: { left: 720, hanging: 360 } } } }] },
+      ],
     },
     sections: [{
       properties: {
-        page: { margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 } },
+        page: {
+          size: { width: 12240, height: 15840 }, // US Letter in DXA (docx-js defaults to A4)
+          margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 }, // 1 inch
+        },
+      },
+      headers: {
+        default: new Header({ children: [new Paragraph({
+          children: [new TextRun({ text: String(title || ""), size: 18, color: "888888" })],
+        })] }),
+      },
+      footers: {
+        default: new Footer({ children: [new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [
+            new TextRun({ text: "第 ", size: 18, color: "888888" }),
+            new TextRun({ children: [PageNumber.CURRENT], size: 18, color: "888888" }),
+            new TextRun({ text: " 页", size: 18, color: "888888" }),
+          ],
+        })] }),
       },
       children,
     }],
