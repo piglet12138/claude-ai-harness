@@ -5,81 +5,33 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 // (top-level mkdir import removed — its only top-level use moved to lib/state.mjs)
 import { fileURLToPath } from "node:url";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 import { dbUsers, dbSessions, dbThreads, dbMessages, dbDocuments, dbBulkImport, dbUsage, dbRatings, dbPv, dbTelemetry, dbToolResultSummary, dbMemory, dbUserData, dbShares } from "./db.mjs";
 import { fileStore, longDocJobs, FILES_DIR } from "./lib/state.mjs";
+import { delay, stripTags, chunkText, safeParseJson, escapeHtml, extractTextFromHtml } from "./lib/util.mjs";
 const XLSX = require("xlsx");
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, TableRow, TableCell, Table, WidthType, BorderStyle, PageBreak } = require("docx");
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
 
-// Shared runtime state (fileStore / longDocJobs / FILES_DIR + startup restore +
-// TTL cleanup) extracted to lib/state.mjs. Imported here as singletons.
-const env = await loadEnv(path.join(root, ".env"));
-const port = Number(env.PORT || process.env.PORT || 3040);
-const baseUrl = process.env.ANTHROPIC_BASE_URL || env.ANTHROPIC_BASE_URL || "https://api.anthropic.com/v1";
-const apiKey = process.env.ANTHROPIC_API_KEY || env.ANTHROPIC_API_KEY;
-const model = process.env.MODEL || env.MODEL || "claude-opus-4-7";
-// 流畅模式（DeepSeek）—— 复用整套 harness（工具/视觉/附件/记忆全在），只把 LLM API
-// 通过 DeepSeek 的 Anthropic 兼容端点（/anthropic/v1/messages）打到 DeepSeek。
-const deepseekApiKey = process.env.DEEPSEEK_API_KEY || env.DEEPSEEK_API_KEY;
-const deepseekBaseUrl = process.env.DEEPSEEK_BASE_URL || env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
-const deepseekModel = process.env.DEEPSEEK_MODEL || env.DEEPSEEK_MODEL || "deepseek-v4-pro";        // 主对话（有视觉）
-const deepseekHaikuModel = process.env.DEEPSEEK_HAIKU_MODEL || env.DEEPSEEK_HAIKU_MODEL || "deepseek-v4-flash"; // 内部摘要/提取（快）
-
-// 每请求 LLM provider（用 AsyncLocalStorage 透传，免改一堆函数签名）。
-// 默认 = Anthropic（luckyapi）；流畅模式 = DeepSeek anthropic 端点。
-const reqCtx = new AsyncLocalStorage();
-function llmProvider() {
-  const p = reqCtx.getStore()?.provider;
-  if (p) return p; // DeepSeek
-  return { isDeepSeek: false, endpoint: apiEndpoint, mainModel: model, haikuModel: HAIKU_MODEL };
-}
-function deepseekProvider() {
-  return {
-    isDeepSeek: true,
-    endpoint: `${deepseekBaseUrl.replace(/\/+$/, "")}/anthropic/v1/messages`,
-    apiKey: deepseekApiKey,
-    mainModel: deepseekModel,
-    haikuModel: deepseekHaikuModel,
-  };
-}
-
-const accessEmail = process.env.ACCESS_EMAIL || env.ACCESS_EMAIL;
-const accessPassword = process.env.ACCESS_PASSWORD || env.ACCESS_PASSWORD;
-const sessionSecret = process.env.SESSION_SECRET || env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
-const braveApiKey = process.env.BRAVE_SEARCH_API_KEY || env.BRAVE_SEARCH_API_KEY;
-const serperApiKey = process.env.SERPER_API_KEY || env.SERPER_API_KEY || "";
-const tavilyApiKey = process.env.TAVILY_API_KEY || env.TAVILY_API_KEY || "";
-const googleCseApiKey = process.env.GOOGLE_CSE_API_KEY || env.GOOGLE_CSE_API_KEY || "";
-const googleCseCx = process.env.GOOGLE_CSE_CX || env.GOOGLE_CSE_CX || "";
-const exaApiKey = process.env.EXA_API_KEY || env.EXA_API_KEY || "";
-const firecrawlApiKey = process.env.FIRECRAWL_API_KEY || env.FIRECRAWL_API_KEY || "";
-const serpApiKey = process.env.SERPAPI_API_KEY || env.SERPAPI_API_KEY || "";
-const searchApiKey = process.env.SEARCHAPI_API_KEY || env.SEARCHAPI_API_KEY || "";
-// Ingestion filter: "relevance" = query-aware Haiku extraction (claude.ai-style), "truncate" = legacy char-slice
-const extractMode = (process.env.EXTRACT_MODE || env.EXTRACT_MODE || "relevance").toLowerCase();
-// claude.ai-style selective retrieval: auto-fetch top-N per search (1 keeps the win, cuts ~2/3 latency vs top-3)
-const autoFetchN = Math.max(0, Number(process.env.AUTO_FETCH_COUNT || env.AUTO_FETCH_COUNT || 1));
-// Skip auto-fetch when inline snippets are already rich (≈ claude.ai inline-content path)
-const inlineRichChars = Math.max(0, Number(process.env.INLINE_RICH_CHARS || env.INLINE_RICH_CHARS || 2600));
-const webSearchEnabled = /^(true|1|yes)$/i.test(process.env.ENABLE_WEB_SEARCH || env.ENABLE_WEB_SEARCH || "false");
-const webSearchCount = Math.max(1, Math.min(5, Number(process.env.WEB_SEARCH_RESULT_COUNT || env.WEB_SEARCH_RESULT_COUNT || 3)));
-const webSearchQueryCount = Math.max(1, Math.min(3, Number(process.env.WEB_SEARCH_QUERY_COUNT || env.WEB_SEARCH_QUERY_COUNT || 2)));
-const googleClientId = process.env.GOOGLE_CLIENT_ID || env.GOOGLE_CLIENT_ID;
-const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET || env.GOOGLE_CLIENT_SECRET;
-const googleRedirectUri = process.env.GOOGLE_REDIRECT_URI || env.GOOGLE_REDIRECT_URI;
-const googleTokenFile = path.resolve(root, process.env.GOOGLE_TOKEN_FILE || env.GOOGLE_TOKEN_FILE || ".google-token.json");
-const googleScopes = ["https://www.googleapis.com/auth/drive.file"];
-const googleOauthStates = new Map();
-
-// Email notifications via Resend (for bug reports)
-const resendApiKey = process.env.RESEND_API_KEY || env.RESEND_API_KEY || "";
-const notifyEmails = (process.env.NOTIFY_EMAILS || env.NOTIFY_EMAILS || "").split(",").map(s => s.trim()).filter(Boolean);
+// Config + key pool + provider routing extracted to lib/config.mjs.
+import {
+  env, port, baseUrl, apiKey, model,
+  deepseekApiKey, deepseekBaseUrl, deepseekModel, deepseekHaikuModel,
+  reqCtx, llmProvider, deepseekProvider,
+  accessEmail, accessPassword, sessionSecret,
+  braveApiKey, serperApiKey, tavilyApiKey, googleCseApiKey, googleCseCx,
+  exaApiKey, firecrawlApiKey, serpApiKey, searchApiKey,
+  extractMode, autoFetchN, inlineRichChars,
+  webSearchEnabled, webSearchCount, webSearchQueryCount,
+  googleClientId, googleClientSecret, googleRedirectUri, googleTokenFile, googleScopes, googleOauthStates,
+  resendApiKey, notifyEmails,
+  apiEndpoint, HAIKU_MODEL, PROACTIVE_TOKEN_BUDGET, HARD_CAP, IN_LOOP_TOKEN_BUDGET,
+  pickKey, markKeyFailed, markKeyOk,
+} from "./lib/config.mjs";
 
 async function sendNotifyEmail(subject, text, html) {
   if (!resendApiKey || !notifyEmails.length) return;
@@ -389,68 +341,8 @@ const anthropicTools = [
     cache_control: { type: "ephemeral" },
   },
 ];
-const apiEndpoint = `${baseUrl.replace(/\/v1\/?$/, "")}/v1/messages`;
-const HAIKU_MODEL = "claude-haiku-4-5-20251001";
-const PROACTIVE_TOKEN_BUDGET = 30000; // trigger Haiku summarization early
-const HARD_CAP = 100000;              // hard truncation fallback after compression
-const IN_LOOP_TOKEN_BUDGET = 80000;   // looser budget for mid-loop compress
-
-// ---------------------------------------------------------------------------
-// API Key Pool — round-robin with temporary cooldown on failure
-// ---------------------------------------------------------------------------
-// Keys from .env: ANTHROPIC_API_KEY is the primary, SUB_AGENT_KEYS is comma-separated extras
-const allApiKeys = [
-  apiKey,
-  ...(process.env.SUB_AGENT_KEYS || env.SUB_AGENT_KEYS || "")
-    .split(",").map(k => k.trim()).filter(Boolean),
-].filter(Boolean);
-const keyCooldowns = new Map(); // key -> cooldownUntil timestamp
-const COOLDOWN_MS = 3 * 60_000; // 3 minutes cooldown after failure
-let keyIndex = 0;
-
-function pickKey(preferSub = false) {
-  const now = Date.now();
-  // If preferSub and we have >1 key, start from index 1 to skip primary
-  const startOffset = (preferSub && allApiKeys.length > 1) ? 1 : 0;
-  // Try all keys, starting from current index
-  for (let i = 0; i < allApiKeys.length; i++) {
-    const idx = (keyIndex + startOffset + i) % allApiKeys.length;
-    const key = allApiKeys[idx];
-    const coolUntil = keyCooldowns.get(key) || 0;
-    if (now >= coolUntil) {
-      keyIndex = idx + 1; // advance for next call
-      return key;
-    }
-  }
-  // All keys on cooldown — use the one that cools down soonest
-  let bestKey = allApiKeys[0], bestTime = Infinity;
-  for (const key of allApiKeys) {
-    const t = keyCooldowns.get(key) || 0;
-    if (t < bestTime) { bestTime = t; bestKey = key; }
-  }
-  console.log(`[KeyPool] All keys on cooldown, using least-cooled key (wait ${Math.round((bestTime - now) / 1000)}s)`);
-  return bestKey;
-}
-
-function markKeyFailed(key, statusCode) {
-  const cooldown = statusCode === 429 ? COOLDOWN_MS : COOLDOWN_MS * 2; // rate limit: 3min, balance/other: 6min
-  keyCooldowns.set(key, Date.now() + cooldown);
-  const masked = key.slice(0, 6) + "..." + key.slice(-4);
-  console.log(`[KeyPool] Key ${masked} cooled down for ${cooldown / 1000}s (HTTP ${statusCode}), ${allApiKeys.length - [...keyCooldowns.values()].filter(t => t > Date.now()).length}/${allApiKeys.length} keys available`);
-}
-
-function markKeyOk(key) {
-  keyCooldowns.delete(key); // clear cooldown on success
-}
-
-console.log(`[KeyPool] Loaded ${allApiKeys.length} API key(s)`);
-
-if (!apiKey) {
-  throw new Error("ANTHROPIC_API_KEY is required. Set it in .env or as an environment variable.");
-}
-if (!accessEmail || !accessPassword) {
-  throw new Error("ACCESS_EMAIL and ACCESS_PASSWORD are required. Set them in .env or as environment variables.");
-}
+// apiEndpoint / HAIKU_MODEL / token budgets / key pool (pickKey, markKeyFailed,
+// markKeyOk) and the required-config guards now live in lib/config.mjs.
 
 // ---------------------------------------------------------------------------
 // User management (SQLite)
@@ -2280,14 +2172,6 @@ async function proactiveCompress(messages, budget, haikuStats) {
   return { messages: final, fromTokens, toTokens };
 }
 
-function safeParseJson(str) {
-  try {
-    return JSON.parse(str || "{}");
-  } catch {
-    return {};
-  }
-}
-
 function toolDisplayArgs(name, args) {
   if (name === "web_search") return { query: args?.query };
   if (name === "fetch_url") return { url: args?.url };
@@ -2852,26 +2736,6 @@ async function braveSearch(query) {
   return merged.slice(0, 8);
 }
 
-function extractTextFromHtml(html) {
-  // Simple HTML to text extraction - strip tags, scripts, styles
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<nav[\s\S]*?<\/nav>/gi, "")
-    .replace(/<footer[\s\S]*?<\/footer>/gi, "")
-    .replace(/<header[\s\S]*?<\/header>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s{2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
 async function executeCode(language, code) {
   const { execFile } = await import("node:child_process");
   const { writeFile, unlink, readFile, readdir, mkdir, rm } = await import("node:fs/promises");
@@ -3074,20 +2938,6 @@ function parseDataImage(url) {
   };
 }
 
-function stripTags(value) {
-  return String(value).replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
-}
-
-function chunkText(text) {
-  const value = String(text || "");
-  if (!value) return [];
-  return value.match(/[\s\S]{1,14}/g) || [value];
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function staticFile(requestPath, res) {
   const cleanPath = decodeURIComponent(requestPath.split("?")[0]);
   const relative = cleanPath === "/" ? "index.html" : cleanPath.replace(/^\/+/, "");
@@ -3231,14 +3081,6 @@ function wrapDocxHtml(fragment, title) {
   <main>${body}</main>
 </body>
 </html>`;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
 }
 
 function googleConfigured() {
@@ -3857,20 +3699,4 @@ function parseInlineFormatting(text) {
 
 function safeDocFilename(name) {
   return String(name || "document").replace(/[\\/:*?"<>|]+/g, "-").slice(0, 80);
-}
-
-
-async function loadEnv(file) {
-  const result = {};
-  try {
-    const text = await fs.readFile(file, "utf8");
-    for (const line of text.split(/\r?\n/)) {
-      if (!line || line.trimStart().startsWith("#") || !line.includes("=")) continue;
-      const index = line.indexOf("=");
-      result[line.slice(0, index)] = line.slice(index + 1);
-    }
-  } catch {
-    // Optional.
-  }
-  return result;
 }
