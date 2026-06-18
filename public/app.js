@@ -2283,16 +2283,17 @@ function regenerateLastMessage() {
 function renderToolCard(tc) {
   const card = document.createElement("div");
   card.className = `tool-card ${tc.status || "running"}`;
-  const isExpandable = (tc.name === "web_search" && tc.sources?.length) || (tc.name === "run_code" && tc.codeResult);
+  const isExpandable = (tc.name === "web_search" && tc.sources?.length) || ((tc.name === "run_code" || tc.name === "generate_image") && tc.codeResult);
   const isClickable = tc.name === "create_artifact" && tc.status === "completed";
   if (isExpandable || isClickable) card.classList.add("interactive");
 
-  const icons = { web_search: "○", fetch_url: "◎", run_code: "▸", create_artifact: "◆" };
+  const icons = { web_search: "○", fetch_url: "◎", run_code: "▸", create_artifact: "◆", generate_image: "✦" };
   const iconText = icons[tc.name] || "·";
   let label = tc.name;
   if (tc.name === "web_search") label = `搜索「${tc.args?.query || "..."}」`;
   else if (tc.name === "fetch_url") label = `读取 ${tc.args?.url ? new URL(tc.args.url).hostname : "..."}`;
   else if (tc.name === "run_code") label = `运行 ${tc.args?.language || "code"}`;
+  else if (tc.name === "generate_image") label = `生成图像「${(tc.args?.prompt || "...").slice(0, 18)}」`;
   else if (tc.name === "generate_long_document") label = `生成长文档「${tc.args?.topic || "..."}」`;
   else if (tc.name === "create_artifact") label = `创建「${tc.args?.title || "Artifact"}」`;
 
@@ -2347,8 +2348,8 @@ function renderToolCard(tc) {
     });
   }
 
-  // Expandable output for run_code
-  if (tc.name === "run_code" && tc.codeResult) {
+  // Expandable output for run_code / generate_image (both carry codeResult with inline images)
+  if ((tc.name === "run_code" || tc.name === "generate_image") && tc.codeResult) {
     const output = document.createElement("div");
     output.className = `tool-code-output${tc._expanded ? " expanded" : ""}${tc.codeResult.images?.length ? " has-images" : ""}`;
     // Show generated downloadable files

@@ -13,8 +13,9 @@ import { fileStore, longDocJobs, FILES_DIR } from "./lib/state.mjs";
 import { delay, stripTags, chunkText, safeParseJson, escapeHtml, extractTextFromHtml } from "./lib/util.mjs";
 import { callHaiku, summarizeWithHaiku, extractRelevant, callClaude } from "./lib/llm.mjs";
 import { multiSearch, braveSearch, fetchPageText } from "./tools/web.mjs";
-import { executeGenerateLongDoc, markdownToDocx, safeDocFilename } from "./skills/docx/index.mjs";
+import { executeGenerateLongDoc, buildDocxBuffer, safeDocFilename } from "./skills/docx/index.mjs";
 import { executeCode } from "./tools/code-exec.mjs";
+import { generateImage } from "./tools/image-gen.mjs";
 import { readJson, readBuffer, json, html, notFound } from "./lib/http.mjs";
 import { googleStatus, startGoogleAuth, googleCallback, uploadGoogleDoc } from "./integrations/google.mjs";
 const XLSX = require("xlsx");
@@ -207,17 +208,33 @@ const agenticSystemPromptText = [
   "要点：用 Excel 公式而非 Python 计算硬编码；openpyxl 的行列从 1 开始。",
   "",
   "### PPTX (PowerPoint) — JavaScript, 用 pptxgenjs",
+  "**第一步永远是策划，不是写代码**：先想清每页的核心观点、信息层级（主/次/辅）、用哪种版式承载，再动手。绝不要每页都「标题 + 一串 bullet」——那是最差的 PPT。",
+  "**版式按内容选**（Bento 卡片思维）：并列比较→等宽卡片并排；主次→一张大卡 + 若干小卡；流程/架构→形状 + 箭头画框架图；数据→原生图表。每页都要有视觉结构。",
+  "**视觉元素按需求路由**（别用文字硬扛该用图的地方）：",
+  "- 框架图 / 流程图 / 架构图 → addShape 画方框 + ShapeType.line 连接（带箭头），不要用纯文字罗列流程",
+  "- 数据（占比 / 趋势 / 对比）→ addChart（bar/line/pie/doughnut），不要把一堆数字堆进 bullet",
+  "- 卡片 / 分区 → addShape(roundRect) 打底，再往上叠文字",
+  "- 封面 / 概念图 / 氛围插图（不需要精确文字的）→ 先调 generate_image 拿到图片绝对路径，再在 run_code 里 slide.addImage({ path: '<路径>', x, y, w, h }) 嵌入。注意：框架图/流程图/图表绝不能用 generate_image（AI 图里文字会糊、不可编辑），必须用形状/addChart 画。",
   "```javascript",
   'const PptxGenJS = require("pptxgenjs");',
   "const pptx = new PptxGenJS();",
-  "pptx.layout = 'LAYOUT_16x9';",
-  "let slide = pptx.addSlide();",
-  "slide.addText('Title', { x: 0.5, y: 0.5, w: 9, h: 1.5, fontSize: 36, bold: true, color: '1E2761' });",
-  "slide.addText('Body text', { x: 0.5, y: 2.5, w: 9, h: 3, fontSize: 16 });",
-  "// 支持: addImage, addChart, addTable, addShape",
+  "pptx.layout = 'LAYOUT_16x9';  // 13.33 x 7.5 英寸",
+  "const INK='1E2761', BLUE='4A57C9', BG='F5F6FA';",
+  "let s = pptx.addSlide();",
+  "s.background = { color: BG };",
+  "// 卡片：圆角矩形打底 + 文字叠加（用细边框，不要 shadow）",
+  "s.addShape(pptx.ShapeType.roundRect, { x:0.5, y:1.5, w:5.8, h:4, rectRadius:0.1, fill:{color:'FFFFFF'}, line:{color:'E3E6F0',width:1} });",
+  "s.addText('要点标题', { x:0.8, y:1.8, w:5.2, h:0.6, fontSize:20, bold:true, color:INK });",
+  "// 框架图：方框 + 带箭头连接线",
+  "s.addShape(pptx.ShapeType.line, { x:2, y:5, w:1.5, h:0, line:{color:'888888', width:2, endArrowType:'triangle'} });",
+  "// 数据图表",
+  "s.addChart(pptx.ChartType.bar, [{name:'S1', labels:['A','B'], values:[5,8]}], { x:7, y:1.5, w:5.5, h:4 });",
   "pptx.writeFile({ fileName: 'output.pptx' });",
   "```",
-  "要点：坐标单位是英寸；选用大胆配色，不要白底黑字；每页都要有视觉元素。",
+  "**pptxgenjs 安全红线**（违反会生成 PowerPoint 打不开的损坏文件，且 node 不报错、zip 校验也通过）：",
+  "- 多个形状不要共享同一个 shadow 对象引用；干脆别加 shadow，用 line 细边框替代立体感",
+  "- ShapeType.line 的 w / h 不能为负；箭头朝左 / 上时用 beginArrowType:'triangle' 而非负长度",
+  "- 坐标单位英寸（16:9 = 13.33 × 7.5）；元素不要超出画布、不要重叠",
   "",
   "### PDF — Python, 用 reportlab",
   "```python",
@@ -282,6 +299,18 @@ const anthropicTools = [
         code: { type: "string", description: "The code to execute" },
       },
       required: ["language", "code"],
+    },
+  },
+  {
+    name: "generate_image",
+    description: "Generate an illustration/concept image from a text prompt (AI image generation). Use for: hero/cover images, concept art, atmospheric illustrations, decorative visuals — especially for PPT slides. Returns an absolute file path you can embed in a later run_code call via pptxgenjs `slide.addImage({ path })`. IMPORTANT: do NOT use this for diagrams that need accurate text/structure (framework diagrams, flowcharts, charts) — those must be drawn natively with pptxgenjs shapes/lines or addChart, because AI images render text garbled and are not editable. Write the prompt in English for best quality; end prompts with 'no text, no words' when the image must not contain text.",
+    input_schema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "Detailed English description of the image. For text-free images, append 'no text, no words'." },
+        size: { type: "string", enum: ["1536x1024", "1024x1024", "1024x1536"], description: "Image size. Use 1536x1024 (landscape) for PPT cover/hero; default 1536x1024." },
+      },
+      required: ["prompt"],
     },
   },
   {
@@ -1794,6 +1823,19 @@ async function executeTool(name, args, res = null, threadId = null, userId = nul
         return { summary: "执行���败", content: `Error: ${e.message}` };
       }
     }
+    case "generate_image": {
+      const prompt = String(args?.prompt || "").trim();
+      if (!prompt) return { summary: "空 prompt", content: "No prompt provided." };
+      const size = String(args?.size || "1536x1024");
+      const r = await generateImage(prompt, size);
+      if (r.error) return { summary: "生图失败", content: `图像生成失败：${r.message}`, error: true };
+      // content（进模型上下文）只给路径，绝不放 base64；dataUrl 走 codeResult.images 仅供前端内联展示。
+      return {
+        summary: "图像已生成",
+        content: `图像已生成并保存到：${r.path}\n尺寸：${r.size}。要把它放进 PPT，在 run_code 里用 pptxgenjs：slide.addImage({ path: "${r.path}", x, y, w, h })。`,
+        codeResult: { output: "(图像已生成)", images: [r.dataUrl], files: [] },
+      };
+    }
     case "generate_long_document": {
       const topic = String(args?.topic || "").trim();
       if (!topic) return { summary: "空主题", content: "No topic provided." };
@@ -2252,8 +2294,8 @@ async function exportDocx(req, res) {
   if (!markdown.trim()) return json(res, { error: "内容为空" }, 400);
 
   try {
-    const doc = markdownToDocx(title, markdown);
-    const buffer = await Packer.toBuffer(doc);
+    // Generate + validate (logs any SOTA-invariant regression; still serves the file).
+    const { buffer } = await buildDocxBuffer(title, markdown);
     const filename = encodeURIComponent(safeDocFilename(title) + ".docx");
     res.writeHead(200, {
       "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

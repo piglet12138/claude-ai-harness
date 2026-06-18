@@ -34,3 +34,6 @@ data.db*
 # Personal payment QR codes — keep OUT of the public repo; deliver to server out-of-band
 public/donate/*.png
 public/donate/*.jpg
+
+# AI 生图 / run_code 产物（运行时生成，勿入库）
+.generated-files/
