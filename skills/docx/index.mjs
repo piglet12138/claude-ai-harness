@@ -16,6 +16,7 @@ const require = createRequire(import.meta.url);
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
         TableRow, TableCell, Table, WidthType, BorderStyle, Header, Footer,
         PageNumber, ShadingType, LevelFormat } = require("docx");
+const JSZip = require("jszip");
 
 // US Letter content width in DXA (12240 page − 2×1440 margins). Used for DXA table widths.
 const CONTENT_WIDTH_DXA = 9360;
@@ -515,4 +516,76 @@ function parseInlineFormatting(text) {
 
 export function safeDocFilename(name) {
   return String(name || "document").replace(/[\\/:*?"<>|]+/g, "-").slice(0, 80);
+}
+
+// ---------------------------------------------------------------------------
+// Validation layer — mirrors the official docx skill's validate step.
+// Our generation is builder-based (docx-js can't emit malformed XML), so this is
+// a regression guard: it confirms the package opens and the SOTA format invariants
+// hold, catching any future change that reintroduces a known defect.
+// ---------------------------------------------------------------------------
+export async function validateDocx(buffer) {
+  const errors = [];
+  const warnings = [];
+
+  let zip;
+  try {
+    zip = await JSZip.loadAsync(buffer);
+  } catch (e) {
+    return { ok: false, errors: [`docx 不是有效的 ZIP/OOXML 包: ${e.message}`], warnings };
+  }
+
+  const docXmlFile = zip.file("word/document.xml");
+  if (!docXmlFile) return { ok: false, errors: ["缺少 word/document.xml"], warnings };
+
+  let xml;
+  try {
+    xml = await docXmlFile.async("string");
+  } catch (e) {
+    return { ok: false, errors: [`document.xml 读取失败: ${e.message}`], warnings };
+  }
+
+  // Required structure
+  if (!/<w:body>/.test(xml)) errors.push("document.xml 缺少 <w:body>");
+
+  // SOTA: explicit page size (US Letter)
+  const pgSz = xml.match(/<w:pgSz\s+w:w="(\d+)"\s+w:h="(\d+)"/);
+  if (!pgSz) {
+    errors.push("未设置页面尺寸 <w:pgSz>（应为 US Letter 12240x15840 DXA）");
+  } else if (pgSz[1] !== "12240" || pgSz[2] !== "15840") {
+    warnings.push(`页面尺寸非 US Letter: ${pgSz[1]}x${pgSz[2]}`);
+  }
+
+  // SOTA: tables use DXA, never PERCENTAGE (breaks in Google Docs)
+  if (/w:type="pct"/.test(xml)) {
+    errors.push("表格使用 PERCENTAGE 宽度（Google Docs 会渲染错位，应改 DXA）");
+  }
+
+  // SOTA: never literal unicode bullets — use real numbering lists
+  if (/<w:t[^>]*>\s*[•▪◦‣·]/.test(xml)) {
+    errors.push("正文含字面 unicode 项目符号（应用 numbering 列表）");
+  }
+
+  // Table integrity: a <w:tbl> must declare column widths
+  const tblCount = (xml.match(/<w:tbl>/g) || []).length;
+  const gridColCount = (xml.match(/<w:gridCol/g) || []).length;
+  if (tblCount > 0 && gridColCount === 0) {
+    errors.push("表格缺少列宽定义 <w:gridCol>");
+  }
+
+  return { ok: errors.length === 0, errors, warnings };
+}
+
+// Generate a validated .docx buffer from Markdown. Returns { buffer, validation }.
+// Logs validation errors/warnings so regressions surface in production logs.
+export async function buildDocxBuffer(title, markdown) {
+  const doc = markdownToDocx(title, markdown);
+  const buffer = await Packer.toBuffer(doc);
+  const validation = await validateDocx(buffer);
+  if (!validation.ok) {
+    console.error(`[DOCX] 验证失败 "${title}": ${validation.errors.join("; ")}`);
+  } else if (validation.warnings.length) {
+    console.log(`[DOCX] 验证警告 "${title}": ${validation.warnings.join("; ")}`);
+  }
+  return { buffer, validation };
 }
