@@ -1471,7 +1471,8 @@ async function chat(req, res) {
     // （= 思考了但啥也没交付）→ 原样重发本轮（不推进轮次预算）。这是 PPT「静默失败」最顽固的一条根因。
     {
       const _visible = (result.textContent || "").trim();
-      const _stall = !result.toolUseBlocks?.length && _visible.length < 4 && (result.outputTokens || 0) > 1200;
+      // result.stalled = 流式早退判定的卡死；或事后判定（无工具+文本近空+烧了大量 output token）
+      const _stall = result.stalled || (!result.toolUseBlocks?.length && _visible.length < 4 && (result.outputTokens || 0) > 1200);
       if (_stall && stallRetries < 8 && round < MAX_ROUNDS - 1) {
         stallRetries++;
         console.log(`[Chat] Round ${round}: thinking-only stall (out=${result.outputTokens}, no text/tool) — retrying same request (${stallRetries}/8)`);
@@ -1739,6 +1740,10 @@ async function consumeAnthropicStream(body, res) {
   let currentBlock = null;
   let stopReason = "";
   let inputTokens = 0, outputTokens = 0, cacheCreationTokens = 0, cacheReadTokens = 0;
+  // 早退：网关偶发狂吐 thinking 块却永不出 text/tool（卡死，~8000 token / ~90s）。一旦 thinking 膨胀过阈值
+  // 仍无任何 text/tool 块出现，就主动中止流并标记 stalled，交上层原样重发——把每次卡死的等待从 ~90s 砍到 ~15s。
+  let thinkingChars = 0, sawRealBlock = false, abortedStall = false;
+  const THINK_ABORT = 12000; // ~3000 token thinking 仍无产出 → 判卡死
 
   while (true) {
     const { value, done } = await reader.read();
@@ -1766,9 +1771,13 @@ async function consumeAnthropicStream(body, res) {
             if (currentBlock.type === "tool_use") {
               currentBlock._inputJson = "";
             }
+            if (currentBlock.type === "text" || currentBlock.type === "tool_use") sawRealBlock = true;
             break;
 
           case "content_block_delta":
+            if (data.delta?.type === "thinking_delta" && data.delta.thinking) {
+              thinkingChars += data.delta.thinking.length;
+            }
             if (data.delta?.type === "text_delta" && data.delta.text) {
               textContent += data.delta.text;
               if (currentBlock) currentBlock.text = (currentBlock.text || "") + data.delta.text;
@@ -1811,9 +1820,16 @@ async function consumeAnthropicStream(body, res) {
         // Ignore malformed
       }
     }
+    // thinking 已膨胀过阈值却仍无 text/tool 块 → 判定卡死，中止流（避免空等 ~90s）
+    if (thinkingChars > THINK_ABORT && !sawRealBlock) {
+      abortedStall = true;
+      try { await reader.cancel(); } catch {}
+      break;
+    }
   }
 
   return {
+    stalled: abortedStall,
     textContent,
     // 只保留 text / tool_use 回传上下文。**剔除 thinking 块**：本流不捕获 thinking_delta/signature，
     // 把「空 thinking 块（无签名）」回传给模型会污染后续轮，导致模型退化成「只 thinking 就 end_turn 不调工具」
