@@ -1360,6 +1360,7 @@ async function chat(req, res) {
   const pptRequested = /(PPT|幻灯片|演示文稿|pptx|slide\s*deck|演示文案)/i.test(_userText);
   let pptDelivered = false;
   let pptNudges = 0;
+  let forcePptxNextRound = false; // nudge 时置真：下一轮用 tool_choice 强制模型必出 make_pptx（网关认这个，探针实证）
 
   try {
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -1385,7 +1386,12 @@ async function chat(req, res) {
       system: systemPrompt,
       messages: apiMessages,
       ...(!isLastRound && roundTools.length ? { tools: roundTools } : {}),
+      // nudge 后强制本轮必出 make_pptx（绕过模型「只 thinking 就 end_turn」的卡顿）。要求 make_pptx 在工具集内。
+      ...(forcePptxNextRound && !isLastRound && roundTools.some((t) => t.name === "make_pptx")
+        ? { tool_choice: { type: "tool", name: "make_pptx" } }
+        : {}),
     };
+    forcePptxNextRound = false; // 一次性
 
     console.log(`[Chat] Round ${round}: sending to ${P.isDeepSeek ? "DeepSeek" : "Anthropic"} (${P.mainModel}), body size: ${JSON.stringify(upstreamBody).length} chars`);
     const upstream = await fetch(P.endpoint, {
@@ -1608,10 +1614,11 @@ async function chat(req, res) {
       // 关键：不依赖 textContent 非空（thinking-only 那轮 textContent 为空，旧守卫会被跳过）。
       if (pptRequested && !pptDelivered && !looksLikeQuestion && pptNudges < 3) {
         pptNudges++;
-        console.log(`[Chat] Round ${round}: PPT requested but not delivered, no tool called — nudging make_pptx (${pptNudges}/3)`);
+        console.log(`[Chat] Round ${round}: PPT requested but not delivered, no tool called — forcing make_pptx (${pptNudges}/3)`);
         // 空文本时用占位 assistant 消息，保证 user/assistant 轮次合法（Anthropic 拒绝空 content）
         apiMessages.push({ role: "assistant", content: (result.textContent && result.textContent.trim()) || "好的，我现在就生成这份 PPT。" });
         apiMessages.push({ role: "user", content: "请立即调用 make_pptx 工具，把完整的 pptxgenjs 脚本作为 code 参数传入，现在就把这份 PPT 生成出来。不要只用文字描述、也不要说“即将开始”，直接发出 make_pptx 工具调用。" });
+        forcePptxNextRound = true; // 下一轮 tool_choice 强制必出 make_pptx
         continue;
       }
       // 通用「未完成的 artifact 意图」启发式（需要可见文本）
@@ -1793,11 +1800,16 @@ async function consumeAnthropicStream(body, res) {
 
   return {
     textContent,
-    allBlocks: allBlocks.map((b) => {
-      if (b.type === "text") return { type: "text", text: b.text || "" };
-      if (b.type === "tool_use") return { type: "tool_use", id: b.id, name: b.name, input: b.input };
-      return b;
-    }),
+    // 只保留 text / tool_use 回传上下文。**剔除 thinking 块**：本流不捕获 thinking_delta/signature，
+    // 把「空 thinking 块（无签名）」回传给模型会污染后续轮，导致模型退化成「只 thinking 就 end_turn 不调工具」
+    // （luckyapi 网关给 opus-4-7 间歇性返回 thinking 块；探针实证默认不传 thinking 参数时简单请求直接出 tool_use）。
+    allBlocks: allBlocks
+      .filter((b) => b.type === "text" || b.type === "tool_use")
+      .map((b) =>
+        b.type === "text"
+          ? { type: "text", text: b.text || "" }
+          : { type: "tool_use", id: b.id, name: b.name, input: b.input }
+      ),
     toolUseBlocks: allBlocks.filter((b) => b.type === "tool_use"),
     stopReason,
     inputTokens,
