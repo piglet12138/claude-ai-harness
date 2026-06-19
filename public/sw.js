@@ -1,6 +1,6 @@
 // Bump this version whenever the caching strategy changes — the activate
 // handler purges every cache that isn't the current one.
-const CACHE = "claude-shell-v3";
+const CACHE = "claude-shell-v4";
 
 // Offline fallbacks only. The HTML shell ("/app") is NOT served cache-first
 // anymore (that caused stale app.html to render until a hard refresh).

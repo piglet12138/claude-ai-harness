@@ -2761,6 +2761,18 @@ function renderDocumentPanel() {
     const ext = (doc.language || doc.filePath?.split(".").pop() || "").toUpperCase();
     const sizeStr = doc.fileSize > 1024 * 1024 ? `${(doc.fileSize / 1024 / 1024).toFixed(1)} MB` : `${Math.round((doc.fileSize || 0) / 1024)} KB`;
     const iconMap = { DOCX: "📄", XLSX: "📊", PPTX: "📽", PDF: "📕", CSV: "📋", ZIP: "📦" };
+    // PPTX 带逐页预览图 → 渲染幻灯片画廊（点缩略图开大图），否则退回通用文件卡
+    if (doc.previewImages?.length) {
+      const slides = doc.previewImages.map((p, i) =>
+        `<a class="pptx-slide" href="/api/files/${p.id}" target="_blank" rel="noopener" title="第 ${p.page || i + 1} 页">
+          <img src="/api/files/${p.id}" alt="第 ${p.page || i + 1} 页" loading="lazy">
+          <span class="pptx-slide-no">${p.page || i + 1}</span>
+        </a>`).join("");
+      els.docPreview.className = "doc-preview pptx-preview";
+      els.docPreview.innerHTML = `<div class="pptx-gallery">${slides}</div>
+        <a href="/api/files/${doc.fileId}" download="${escapeAttribute(doc.title)}" class="file-artifact-download pptx-dl">下载 PPTX · ${sizeStr}</a>`;
+      return;
+    }
     els.docPreview.innerHTML = `<div class="file-artifact-preview">
       <div class="file-artifact-icon">${iconMap[ext] || "📁"}</div>
       <div class="file-artifact-name">${escapeHtml(doc.title)}</div>
@@ -3248,6 +3260,7 @@ function upsertArtifactFromTool(data, thread) {
   if (artifactType === "file" && data.fileId) {
     payload.fileId = data.fileId;
     payload.fileSize = data.fileSize || 0;
+    if (data.previewImages?.length) payload.previewImages = data.previewImages;
   }
   if (existing) {
     existing.versions = existing.versions || [];

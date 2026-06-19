@@ -2073,6 +2073,44 @@ img.brand-logo.large {
 }
 .file-artifact-download:hover { background: var(--accent, #bd5d3a); text-decoration: none; }
 
+/* PPTX 逐页预览画廊 */
+.doc-preview.pptx-preview { display: flex; flex-direction: column; align-items: center; padding: 18px 16px 24px; gap: 16px; }
+.pptx-gallery {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+.pptx-slide {
+  position: relative;
+  display: block;
+  border: 1px solid var(--border, #e3ddd2);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(20, 24, 30, 0.06);
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.pptx-slide:hover { box-shadow: 0 4px 16px rgba(20, 24, 30, 0.16); transform: translateY(-2px); }
+.pptx-slide img { display: block; width: 100%; height: auto; }
+.pptx-slide-no {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: rgba(14, 36, 54, 0.78);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 650;
+  text-align: center;
+}
+.pptx-dl { margin-top: 4px; }
+@media (max-width: 640px) {
+  .pptx-gallery { grid-template-columns: 1fr; }
+}
+
 .code-output-files {
   display: flex;
   flex-direction: column;

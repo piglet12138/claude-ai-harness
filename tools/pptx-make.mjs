@@ -77,6 +77,26 @@ async function visionQA(imageDataUrls) {
   return { pass, report: text.trim() };
 }
 
+// 把渲染出的逐页图（视觉 QA 已用过的那批）持久化成预览图，注册进 fileStore（7天过期，同 pptx）。
+// 前端用 <img src="/api/files/id"> 内联展示；只被 previewImages 数组引用，不作为独立 artifact 冒出。
+async function capturePreview(imageDataUrls) {
+  const out = [];
+  for (let i = 0; i < imageDataUrls.length; i++) {
+    const m = imageDataUrls[i].match(/^data:(image\/\w+);base64,(.+)$/);
+    if (!m) continue;
+    const fileId = crypto.randomUUID();
+    const ext = m[1] === "image/png" ? "png" : "jpg";
+    const destPath = path.join(FILES_DIR, `${fileId}.${ext}`);
+    await fs.writeFile(destPath, Buffer.from(m[2], "base64"));
+    const info = await fs.stat(destPath);
+    const meta = { id: fileId, filePath: destPath, fileName: `slide-${i + 1}.${ext}`, mime: m[1], size: info.size, expires: Date.now() + 7 * 24 * 3600_000 };
+    fileStore.set(fileId, meta);
+    fs.writeFile(path.join(FILES_DIR, `${fileId}.meta.json`), JSON.stringify(meta)).catch(() => {});
+    out.push({ id: fileId, page: i + 1 });
+  }
+  return out;
+}
+
 async function captureFile(srcPath, displayName) {
   const fileId = crypto.randomUUID();
   const destPath = path.join(FILES_DIR, `${fileId}.pptx`);
@@ -101,21 +121,24 @@ export async function makePptx(code, fileName = "presentation.pptx") {
     if (!pptxName) return { ok: false, pass: false, content: "代码跑完但没产出 .pptx 文件（确认调用了 writeFile）。", files: [] };
     const pptxPath = path.join(workDir, pptxName);
     // 3. 渲染 + 视觉 QA（失败则优雅降级：不阻断，标注 QA 跳过）
+    let imgs = [];
     let qa;
     try {
-      const imgs = await renderToImages(pptxPath, workDir);
+      imgs = await renderToImages(pptxPath, workDir);
       if (!imgs.length) throw new Error("渲染未产出图片");
       qa = await visionQA(imgs);
     } catch (e) {
       const file = await captureFile(pptxPath, fileName);
-      return { ok: true, pass: true, degraded: true, content: `PPT 已生成（视觉 QA 不可用，已跳过：${String(e.message).slice(0, 120)}）。`, files: [file] };
+      const preview = imgs.length ? await capturePreview(imgs) : [];
+      return { ok: true, pass: true, degraded: true, content: `PPT 已生成（视觉 QA 不可用，已跳过：${String(e.message).slice(0, 120)}）。`, files: [file], preview };
     }
-    // 4. 据判定决定是否捕获
+    // 4. 据判定决定是否捕获（过关同时持久化逐页预览图）
     if (qa.pass) {
       const file = await captureFile(pptxPath, fileName);
-      return { ok: true, pass: true, content: `✅ PPT 已生成并通过视觉 QA。\n${qa.report.slice(0, 600)}`, files: [file] };
+      const preview = await capturePreview(imgs);
+      return { ok: true, pass: true, content: `✅ PPT 已生成并通过视觉 QA。\n${qa.report.slice(0, 600)}`, files: [file], preview };
     }
-    return { ok: true, pass: false, content: `⚠️ 视觉 QA 未通过，请按缺陷改 pptxgenjs 代码后再次调用 make_pptx（本次未产出可下载文件）：\n\n${qa.report.slice(0, 2200)}`, files: [] };
+    return { ok: true, pass: false, content: `⚠️ 视觉 QA 未通过，请按缺陷改 pptxgenjs 代码后再次调用 make_pptx（本次未产出可下载文件）：\n\n${qa.report.slice(0, 2200)}`, files: [], preview: [] };
   } finally {
     fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
   }

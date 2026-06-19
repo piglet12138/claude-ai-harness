@@ -1521,6 +1521,8 @@ async function chat(req, res) {
               file_path: f.name,
               fileId: f.id,
               fileSize: f.size,
+              // PPTX：随文件带上逐页预览图（make_pptx 渲染 QA 时已产出），前端在文档面板内联展示
+              previewImages: ext === "pptx" && toolResult.codeResult.preview?.length ? toolResult.codeResult.preview : undefined,
             };
             if (chatThreadId) {
               try { dbDocuments.upsert(chatThreadId, { id: crypto.randomUUID(), ...artifactDoc }); } catch {}
@@ -1864,7 +1866,7 @@ async function executeTool(name, args, res = null, threadId = null, userId = nul
         return {
           summary: r.pass ? (r.degraded ? "PPT 已生成(QA 跳过)" : "PPT 已生成·QA 通过") : "QA 未过·需修正",
           content: r.content.slice(0, 4000),
-          codeResult: { output: r.pass ? "(PPT 已生成)" : "(QA 未通过)", images: [], files: r.files || [] },
+          codeResult: { output: r.pass ? "(PPT 已生成)" : "(QA 未通过)", images: [], files: r.files || [], preview: r.preview || [] },
         };
       } catch (e) {
         return { summary: "make_pptx 出错", content: `make_pptx 执行异常：${e.message}` };
