@@ -95,7 +95,7 @@ export async function makePptx(code, fileName = "presentation.pptx") {
   try {
     // 1. 跑代码
     const run = await runCode(code, workDir);
-    if (!run.ok) return { ok: false, pass: false, content: `代码执行失败（含 track() 越界断言）：\n${run.output.slice(0, 1500)}`, files: [] };
+    if (!run.ok) return { ok: false, pass: false, content: `代码执行失败（含 pptx-qa 的对比度/几何/字号硬断言；按报错改 pptxgenjs 代码后重调 make_pptx）：\n${run.output.slice(0, 1500)}`, files: [] };
     // 2. 找产出的 pptx
     const pptxName = (await fs.readdir(workDir)).find(f => /\.pptx$/i.test(f));
     if (!pptxName) return { ok: false, pass: false, content: "代码跑完但没产出 .pptx 文件（确认调用了 writeFile）。", files: [] };
