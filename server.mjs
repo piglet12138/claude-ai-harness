@@ -16,6 +16,7 @@ import { multiSearch, braveSearch, fetchPageText } from "./tools/web.mjs";
 import { executeGenerateLongDoc, buildDocxBuffer, safeDocFilename } from "./skills/docx/index.mjs";
 import { executeCode } from "./tools/code-exec.mjs";
 import { generateImage } from "./tools/image-gen.mjs";
+import { makePptx } from "./tools/pptx-make.mjs";
 import { readJson, readBuffer, json, html, notFound } from "./lib/http.mjs";
 import { googleStatus, startGoogleAuth, googleCallback, uploadGoogleDoc } from "./integrations/google.mjs";
 const XLSX = require("xlsx");
@@ -207,7 +208,7 @@ const agenticSystemPromptText = [
   "```",
   "要点：用 Excel 公式而非 Python 计算硬编码；openpyxl 的行列从 1 开始。",
   "",
-  "### PPTX (PowerPoint) — JavaScript, 用 pptxgenjs（目标：代码构建 + 图标 + 设计系统的专业水准，不是模板填充）",
+  "### PPTX (PowerPoint) — 用 make_pptx 工具构建（把下面这套 pptxgenjs 脚本作为 code 传给它；它带渲染+视觉 QA 闭环，不过关会回缺陷让你改了重调）。目标：代码构建 + 图标 + 设计系统的专业水准，不是模板填充。",
   "**第一步永远是策划**：先想清每页核心观点、信息层级（主/次/辅）、用哪种版式承载，再写代码。绝不每页都「标题 + 一串 bullet」。",
   "**设计系统（开头定义一次、全程复用）**：",
   "- 调色板用常量，**十六进制不带 #**（带 # 会让 pptxgenjs 生成损坏文件）。深色主题示例：NAVY='08263F', TEAL='0E9488', CYAN='22D3EE', INK='0E2436', MUTED='5E7A8C', LIGHT='F2F8FA', WHITE='FFFFFF'。",
@@ -260,7 +261,7 @@ const agenticSystemPromptText = [
   "- 用户说「Word文档」「docx」（简短独立文件，非报告/白皮书）→ 用 docx (JS) via run_code",
   "- 用户说「docx白皮书」「Word格式报告」「下载Word版」→ 用 generate_long_document（内置预览，点「下载DOCX」获取Word）",
   "- 用户说「Excel」「表格文件」「xlsx」→ 用 openpyxl (Python)",
-  "- 用户说「PPT」「幻灯片」「演示文稿」「pptx」→ 用 pptxgenjs (JS)",
+  "- 用户说「PPT」「幻灯片」「演示文稿」「pptx」→ **用 make_pptx 工具**（不是 run_code）：把整段 pptxgenjs 脚本作为 code 传进去。它会跑代码 + 渲染 + 视觉 QA：QA 不过会返回逐页缺陷清单且不产出文件——你据缺陷改坐标/配色后**再次调用 make_pptx**；QA 过了才给可下载文件。pptxgenjs 写法、设计系统、track 卡口同上。",
   "- 用户说「PDF」→ 用 reportlab (Python)",
   "- 不确定格式时，优先用 create_artifact 生成 HTML 文档（可在线预览）",
   "- run_code 生成了 .docx/.xlsx/.pptx/.pdf 文件后，**禁止**再用 create_artifact 生成 HTML 预览",
@@ -319,6 +320,18 @@ const anthropicTools = [
         size: { type: "string", enum: ["1536x1024", "1024x1024", "1024x1536"], description: "Image size. Use 1536x1024 (landscape) for PPT cover/hero; default 1536x1024." },
       },
       required: ["prompt"],
+    },
+  },
+  {
+    name: "make_pptx",
+    description: "Build a PowerPoint (.pptx) from pptxgenjs JavaScript code, with a built-in render + visual QA loop. ALWAYS use this (not run_code) when the user wants slides/a deck/PPT/演示文稿. Pass the full pptxgenjs script as `code` (same environment as run_code: pptxgenjs/react-icons/sharp available; wrap in an async IIFE; write to 'output.pptx'). The tool runs your code, renders the slides to images, and has a vision model inspect them for invisible/low-contrast text, overflow, overlap, and imbalance. If QA fails it returns a per-slide defect list and NO downloadable file — fix the coordinates/colors in your code and call make_pptx again. If QA passes it returns the downloadable .pptx. Follow the PPTX design-system guidance in the system prompt.",
+    input_schema: {
+      type: "object",
+      properties: {
+        code: { type: "string", description: "Full pptxgenjs JS script (async IIFE) that writes 'output.pptx'." },
+        fileName: { type: "string", description: "Download filename, e.g. 'BettaFish_介绍.pptx'. Optional." },
+      },
+      required: ["code"],
     },
   },
   {
@@ -1498,7 +1511,7 @@ async function chat(req, res) {
         }
 
         // Emit generated files as file-type artifacts for document panel
-        if (tc.name === "run_code" && toolResult.codeResult?.files?.length) {
+        if ((tc.name === "run_code" || tc.name === "make_pptx") && toolResult.codeResult?.files?.length) {
           for (const f of toolResult.codeResult.files) {
             const ext = f.name.split(".").pop().toLowerCase();
             const artifactDoc = {
@@ -1843,6 +1856,21 @@ async function executeTool(name, args, res = null, threadId = null, userId = nul
         content: `图像已生成并保存到：${r.path}\n尺寸：${r.size}。要把它放进 PPT，在 run_code 里用 pptxgenjs：slide.addImage({ path: "${r.path}", x, y, w, h })。`,
         codeResult: { output: "(图像已生成)", images: [r.dataUrl], files: [] },
       };
+    }
+    case "make_pptx": {
+      const code = String(args?.code || "");
+      if (!code.trim()) return { summary: "空代码", content: "No pptxgenjs code provided." };
+      const fileName = String(args?.fileName || "presentation.pptx").replace(/[^\w.\-一-鿿]/g, "_");
+      try {
+        const r = await makePptx(code, /\.pptx$/i.test(fileName) ? fileName : fileName + ".pptx");
+        return {
+          summary: r.pass ? (r.degraded ? "PPT 已生成(QA 跳过)" : "PPT 已生成·QA 通过") : "QA 未过·需修正",
+          content: r.content.slice(0, 4000),
+          codeResult: { output: r.pass ? "(PPT 已生成)" : "(QA 未通过)", images: [], files: r.files || [] },
+        };
+      } catch (e) {
+        return { summary: "make_pptx 出错", content: `make_pptx 执行异常：${e.message}` };
+      }
     }
     case "generate_long_document": {
       const topic = String(args?.topic || "").trim();
