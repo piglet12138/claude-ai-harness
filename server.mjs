@@ -1361,6 +1361,7 @@ async function chat(req, res) {
   let pptDelivered = false;
   let pptNudges = 0;
   let forcePptxNextRound = false; // nudge 时置真：下一轮用 tool_choice 强制模型必出 make_pptx（网关认这个，探针实证）
+  let stallRetries = 0; // 网关 thinking-only 卡死响应的原样重发次数（每请求）
 
   try {
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -1464,6 +1465,20 @@ async function chat(req, res) {
     totalCacheCreationTokens += result.cacheCreationTokens || 0;
     totalCacheReadTokens += result.cacheReadTokens || 0;
     console.log(`[Chat] Round ${round}: stream consumed, stopReason=${result.stopReason}, toolUse=${result.toolUseBlocks?.length || 0}, tokens: +${result.inputTokens}/${result.outputTokens}, cache: creation=${result.cacheCreationTokens || 0} read=${result.cacheReadTokens || 0}`);
+
+    // luckyapi 网关给 opus-4-7 间歇性返回「只有 thinking 块、无可见文本、无工具调用、end_turn」的卡死响应（flaky：
+    // 同一请求原样重发常常直接出工具调用——探针实证）。检测：这轮没产出任何工具、可见文本近空，却烧掉不少 output token
+    // （= 思考了但啥也没交付）→ 原样重发本轮（不推进轮次预算）。这是 PPT「静默失败」最顽固的一条根因。
+    {
+      const _visible = (result.textContent || "").trim();
+      const _stall = !result.toolUseBlocks?.length && _visible.length < 4 && (result.outputTokens || 0) > 1200;
+      if (_stall && stallRetries < 3 && round < MAX_ROUNDS - 1) {
+        stallRetries++;
+        console.log(`[Chat] Round ${round}: thinking-only stall (out=${result.outputTokens}, no text/tool) — retrying same request (${stallRetries}/3)`);
+        round--; // 重做本轮（for 的 round++ 会抵消），用同一 apiMessages 再请求一次
+        continue;
+      }
+    }
 
     if (result.stopReason === "tool_use" && result.toolUseBlocks.length) {
       const allSearches = result.toolUseBlocks.every((t) => t.name === "web_search");
