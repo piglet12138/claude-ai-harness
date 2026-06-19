@@ -1600,24 +1600,29 @@ async function chat(req, res) {
       continue; // Next round
     }
 
-    // No tool calls this round — model may have narrated intent then ended turn without acting.
-    if (result.textContent && !result.toolUseBlocks?.length && round < MAX_ROUNDS - 1) {
-      const text = result.textContent.slice(-300);
+    // No tool calls this round — model may have narrated intent (or only emitted a thinking block) then ended turn without acting.
+    if (!result.toolUseBlocks?.length && round < MAX_ROUNDS - 1) {
+      const text = (result.textContent || "").slice(-300);
       const looksLikeQuestion = /[？?]\s*$/.test(text.trim()) || /(请问|想要什么|哪种|是否需要|要不要|你希望)/.test(text);
-      // 用户要 PPT 但还没产出文件，而模型这轮没调任何工具（最常见：嘴上说"现在开始制作PPT"就 end_turn）→ 直接推它去调 make_pptx
+      // 用户要 PPT 但还没产出文件、这轮没调任何工具（最常见：嘴上说"现在开始制作PPT"就 end_turn；或只产出 thinking 块无可见文本）→ 直接推它去调 make_pptx。
+      // 关键：不依赖 textContent 非空（thinking-only 那轮 textContent 为空，旧守卫会被跳过）。
       if (pptRequested && !pptDelivered && !looksLikeQuestion && pptNudges < 3) {
         pptNudges++;
         console.log(`[Chat] Round ${round}: PPT requested but not delivered, no tool called — nudging make_pptx (${pptNudges}/3)`);
-        apiMessages.push({ role: "assistant", content: result.textContent });
+        // 空文本时用占位 assistant 消息，保证 user/assistant 轮次合法（Anthropic 拒绝空 content）
+        apiMessages.push({ role: "assistant", content: (result.textContent && result.textContent.trim()) || "好的，我现在就生成这份 PPT。" });
         apiMessages.push({ role: "user", content: "请立即调用 make_pptx 工具，把完整的 pptxgenjs 脚本作为 code 参数传入，现在就把这份 PPT 生成出来。不要只用文字描述、也不要说“即将开始”，直接发出 make_pptx 工具调用。" });
         continue;
       }
-      const wantsArtifact = /生成|创建|整理成|输出|写一份|制作/.test(text) && /报告|文档|方案|调研|表格|artifact/i.test(text);
-      if (wantsArtifact) {
-        console.log(`[Chat] Round ${round}: detected unfinished artifact intent, auto-continuing`);
-        apiMessages.push({ role: "assistant", content: result.textContent });
-        apiMessages.push({ role: "user", content: "请继续，使用 create_artifact 工具生成完整内容。" });
-        continue;
+      // 通用「未完成的 artifact 意图」启发式（需要可见文本）
+      if (result.textContent) {
+        const wantsArtifact = /生成|创建|整理成|输出|写一份|制作/.test(text) && /报告|文档|方案|调研|表格|artifact/i.test(text);
+        if (wantsArtifact) {
+          console.log(`[Chat] Round ${round}: detected unfinished artifact intent, auto-continuing`);
+          apiMessages.push({ role: "assistant", content: result.textContent });
+          apiMessages.push({ role: "user", content: "请继续，使用 create_artifact 工具生成完整内容。" });
+          continue;
+        }
       }
     }
     break;
