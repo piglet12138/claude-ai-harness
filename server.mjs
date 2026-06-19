@@ -1472,9 +1472,9 @@ async function chat(req, res) {
     {
       const _visible = (result.textContent || "").trim();
       const _stall = !result.toolUseBlocks?.length && _visible.length < 4 && (result.outputTokens || 0) > 1200;
-      if (_stall && stallRetries < 3 && round < MAX_ROUNDS - 1) {
+      if (_stall && stallRetries < 8 && round < MAX_ROUNDS - 1) {
         stallRetries++;
-        console.log(`[Chat] Round ${round}: thinking-only stall (out=${result.outputTokens}, no text/tool) — retrying same request (${stallRetries}/3)`);
+        console.log(`[Chat] Round ${round}: thinking-only stall (out=${result.outputTokens}, no text/tool) — retrying same request (${stallRetries}/8)`);
         round--; // 重做本轮（for 的 round++ 会抵消），用同一 apiMessages 再请求一次
         continue;
       }
