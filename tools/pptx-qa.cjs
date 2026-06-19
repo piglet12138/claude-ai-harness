@@ -72,22 +72,30 @@ const _ovl = (a, b) =>
   a.x != null && b.x != null &&
   a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 
-// 写文件前对每页跑：越界、装饰压文字、同级卡片互相重叠、正文字号失控。
-function assertGeometry(slide, { W = 13.33, H = 7.5, margin = 0.4 } = {}) {
+// 写文件前对每页跑。【高精度、低假阳性】只拦真正会损坏/裁切版面的硬错误：
+//   ① 元素超出「真实画布边缘」被裁切（不是超出 0.4 安全边距——那是美观问题，交给视觉判官）；
+//   ② 同级卡片「显著」互相重叠。
+// 故意不再做的（曾导致 make_pptx 反复失败、模型删光装饰还引入语法错误、最终 17 分钟一场空）：
+//   · 装饰元素（_role:'decoration'）出血到画布外是设计意图，豁免越界检查；
+//   · 「装饰压文字」误报率高（背景色块/氛围圆压在文字下很正常），删除，由视觉判官兜底真正读不清的情况；
+//   · 「轻微越界」（几百分之一英寸）不再致命，加 tol 容差。
+function assertGeometry(slide, { W = 13.33, H = 7.5, tol = 0.12 } = {}) {
   const els = slide.__els || [];
   const errs = [];
   for (const e of els) {
     if (e.x == null || e.w == null) continue;
-    if (e.x < margin - 1e-6 || e.y < margin - 1e-6 || e.x + e.w > W - margin + 1e-6 || e.y + e.h > H - margin + 1e-6)
-      errs.push(`越界: ${e.role} "${String(e.text || "").slice(0, 14)}" @(${e.x},${e.y}) 尺寸(${e.w}x${e.h})`);
+    if (e.role === "decoration") continue; // 装饰本就可以出血到画布外
+    if (e.x < -tol || e.y < -tol || e.x + e.w > W + tol || e.y + e.h > H + tol)
+      errs.push(`元素超出画布被裁切: ${e.role} "${String(e.text || "").slice(0, 14)}" @(${e.x},${e.y}) 尺寸(${e.w}x${e.h})，画布 ${W}x${H}`);
   }
-  const deco = els.filter((e) => e.role === "decoration");
-  const text = els.filter((e) => e.role === "text");
-  for (const d of deco) for (const t of text)
-    if (_ovl(d, t)) errs.push(`装饰压文字: 装饰@(${d.x},${d.y}) 盖住 "${String(t.text || "").slice(0, 14)}"`);
-  const cards = els.filter((e) => e.role === "card");
-  for (let i = 0; i < cards.length; i++) for (let j = i + 1; j < cards.length; j++)
-    if (_ovl(cards[i], cards[j])) errs.push(`卡片重叠: #${i}(@${cards[i].x},${cards[i].y}) 与 #${j}(@${cards[j].x},${cards[j].y})`);
+  const cards = els.filter((e) => e.role === "card" && e.x != null && e.w != null);
+  for (let i = 0; i < cards.length; i++) for (let j = i + 1; j < cards.length; j++) {
+    const a = cards[i], b = cards[j];
+    const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+    const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+    if (ox > 0.15 && oy > 0.15) // 显著重叠才报（相邻/相接不算）
+      errs.push(`卡片显著重叠: #${i}(@${a.x},${a.y}) 与 #${j}(@${b.x},${b.y}) 重叠区约 ${ox.toFixed(2)}x${oy.toFixed(2)}`);
+  }
   if (errs.length) throw new Error("[几何自检失败]\n  " + errs.join("\n  "));
   return slide;
 }

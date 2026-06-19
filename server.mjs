@@ -241,7 +241,7 @@ const agenticSystemPromptText = [
   "```",
   "**版式范式（按内容挑）**：封面=深色底 + 大圆氛围 + 图标徽章 + 衬线大标题 + 数据卡条；要点=2×3 卡网格（每卡圆形图标 + 标题 + 描述）；架构/流程=纵向流（深色条=入口/出口、白卡=并列组件、浅色带=循环），用色块权重区分层级；数据=addChart；双主题=50/50 双栏（一白一深）。",
   "**其它视觉**：框架图/流程图→addShape 方框 + ShapeType.line 箭头（别纯文字罗列）；封面/氛围插图（不需精确文字）可用 generate_image 拿路径再 addImage；但**框架图/流程图/图表绝不用 generate_image**（AI 图文字糊、不可编辑），必须用形状/图标/addChart 画。",
-  "**安全红线（用 pptx-qa 强制，每页必做）**：① 每页 `QA.instrument(p.addSlide())` 自动登记，写文件前 `QA.assertGeometry(s)`——越界/装饰压字/卡片重叠会 throw 不出文件，你据报错改了重调 make_pptx；② **文字颜色一律用 `QA.textOn(背景)` 自动配对**，自选强调色压底前 `QA.assertReadable(色,底,{large?})` 先验（正文 ≥4.5、标签/大字 ≥3.0），杜绝隐形文字；③ 正文字号别超 `SZ.BODY_MAX`(17pt)，标题才大；④ shadow 用工厂函数勿复用同一对象；⑤ ShapeType.line 的 w/h 不能为负（朝左/上用 beginArrowType:'triangle'）；⑥ 颜色十六进制不带 #；⑦ 大圆氛围标 `_role:'decoration'`、卡片标 `_role:'card'` 才能被重叠检测覆盖。这层过了，make_pptx 还会渲染+视觉判官兜底。",
+  "**安全红线（用 pptx-qa 强制，每页必做）**：① 每页 `QA.instrument(p.addSlide())` 自动登记，写文件前 `QA.assertGeometry(s)`——只在「元素超出真实画布(13.33×7.5)被裁切」或「卡片显著重叠」时才 throw（轻微超出安全边距不致命，由视觉判官把关）；② **文字颜色一律用 `QA.textOn(背景)` 自动配对**，自选强调色压底前 `QA.assertReadable(色,底,{large?})` 先验（正文 ≥4.5、标签/大字 ≥3.0），杜绝隐形文字；③ 正文字号别超 `SZ.BODY_MAX`(17pt)，标题才大；④ shadow 用工厂函数勿复用同一对象；⑤ ShapeType.line 的 w/h 不能为负（朝左/上用 beginArrowType:'triangle'）；⑥ 颜色十六进制不带 #；⑦ 大圆氛围标 `_role:'decoration'`（可放心出血到画布外、压在文字下做背景，已豁免越界/压字检查）、卡片标 `_role:'card'`（参与重叠检测）。这层过了，make_pptx 还会渲染+视觉判官兜底。",
   "",
   "### PDF — Python, 用 reportlab",
   "```python",
@@ -259,7 +259,7 @@ const agenticSystemPromptText = [
   "- 用户说「Word文档」「docx」（简短独立文件，非报告/白皮书）→ 用 docx (JS) via run_code",
   "- 用户说「docx白皮书」「Word格式报告」「下载Word版」→ 用 generate_long_document（内置预览，点「下载DOCX」获取Word）",
   "- 用户说「Excel」「表格文件」「xlsx」→ 用 openpyxl (Python)",
-  "- 用户说「PPT」「幻灯片」「演示文稿」「pptx」→ **用 make_pptx 工具**（不是 run_code）：把整段 pptxgenjs 脚本作为 code 传进去。它会跑代码 + 渲染 + 视觉 QA：QA 不过会返回逐页缺陷清单且不产出文件——你据缺陷改坐标/配色后**再次调用 make_pptx**；QA 过了才给可下载文件。pptxgenjs 写法、设计系统、track 卡口同上。",
+  "- 用户说「PPT」「幻灯片」「演示文稿」「pptx」→ **用 make_pptx 工具**（不是 run_code）：把整段 pptxgenjs 脚本作为 code 传进去。它会跑代码 + 渲染 + 视觉 QA。**失败处理铁律**：① 若返回「代码执行失败/几何自检失败/对比度不足」——这是确定性硬错误，**只改报错明确指出的那几个元素**（某个越界坐标、某处低对比色、某个语法 typo），**绝不整份重写**（整份重写极易引入新的逗号/字段 typo，陷入越改越坏的死循环）；② 若返回「视觉 QA 发现问题」——文件其实已经可下载了，只需针对清单里的点微调后再调一次即可，最多再试 1–2 次就够，不要无限纠结美观。pptxgenjs 写法、设计系统、QA 卡口同上。",
   "- 用户说「PDF」→ 用 reportlab (Python)",
   "- 不确定格式时，优先用 create_artifact 生成 HTML 文档（可在线预览）",
   "- run_code 生成了 .docx/.xlsx/.pptx/.pdf 文件后，**禁止**再用 create_artifact 生成 HTML 预览",
@@ -1351,6 +1351,8 @@ async function chat(req, res) {
   const TOKEN_BUDGET = IN_LOOP_TOKEN_BUDGET;
   let totalInputTokens = 0, totalOutputTokens = 0, totalCacheCreationTokens = 0, totalCacheReadTokens = 0;
   let totalRounds = 0;
+  let pptxVizFails = 0; // make_pptx 视觉判官不过的次数（每请求）；到上限后即便没过也交付，杜绝无限重改
+  const PPTX_MAX_VIZ_RETRIES = 2;
 
   try {
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -1531,7 +1533,14 @@ async function chat(req, res) {
           }
           // If run_code produced downloadable doc files, mark done so AI won't re-generate HTML
           if (toolResult.codeResult.files.some(f => /\.(docx|xlsx|pptx|pdf)$/i.test(f.name))) {
-            docGenerated = true;
+            // make_pptx 视觉判官未过：文件已作为 best-effort 交付（上方 artifact 已 emit），
+            // 但允许模型最多再改 PPTX_MAX_VIZ_RETRIES 次；到上限则收手交付，避免反复重写 17 分钟一场空。
+            if (tc.name === "make_pptx" && toolResult.codeResult.pass === false && pptxVizFails < PPTX_MAX_VIZ_RETRIES) {
+              pptxVizFails++;
+              console.log(`[Chat] make_pptx viz QA failed, best-effort delivered; allowing retry ${pptxVizFails}/${PPTX_MAX_VIZ_RETRIES}`);
+            } else {
+              docGenerated = true;
+            }
           }
         }
 
@@ -1866,7 +1875,7 @@ async function executeTool(name, args, res = null, threadId = null, userId = nul
         return {
           summary: r.pass ? (r.degraded ? "PPT 已生成(QA 跳过)" : "PPT 已生成·QA 通过") : "QA 未过·需修正",
           content: r.content.slice(0, 4000),
-          codeResult: { output: r.pass ? "(PPT 已生成)" : "(QA 未通过)", images: [], files: r.files || [], preview: r.preview || [] },
+          codeResult: { output: r.pass ? "(PPT 已生成)" : "(QA 未通过)", images: [], files: r.files || [], preview: r.preview || [], pass: r.pass },
         };
       } catch (e) {
         return { summary: "make_pptx 出错", content: `make_pptx 执行异常：${e.message}` };

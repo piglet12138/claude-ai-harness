@@ -120,25 +120,24 @@ export async function makePptx(code, fileName = "presentation.pptx") {
     const pptxName = (await fs.readdir(workDir)).find(f => /\.pptx$/i.test(f));
     if (!pptxName) return { ok: false, pass: false, content: "代码跑完但没产出 .pptx 文件（确认调用了 writeFile）。", files: [] };
     const pptxPath = path.join(workDir, pptxName);
-    // 3. 渲染 + 视觉 QA（失败则优雅降级：不阻断，标注 QA 跳过）
-    let imgs = [];
-    let qa;
+    // 3. 渲染 + 视觉 QA（渲染/视觉不可用则优雅降级，不阻断）
+    let imgs = [], qa = null, degradeMsg = "";
     try {
       imgs = await renderToImages(pptxPath, workDir);
       if (!imgs.length) throw new Error("渲染未产出图片");
       qa = await visionQA(imgs);
     } catch (e) {
-      const file = await captureFile(pptxPath, fileName);
-      const preview = imgs.length ? await capturePreview(imgs) : [];
-      return { ok: true, pass: true, degraded: true, content: `PPT 已生成（视觉 QA 不可用，已跳过：${String(e.message).slice(0, 120)}）。`, files: [file], preview };
+      degradeMsg = String(e.message).slice(0, 120);
     }
-    // 4. 据判定决定是否捕获（过关同时持久化逐页预览图）
-    if (qa.pass) {
-      const file = await captureFile(pptxPath, fileName);
-      const preview = await capturePreview(imgs);
-      return { ok: true, pass: true, content: `✅ PPT 已生成并通过视觉 QA。\n${qa.report.slice(0, 600)}`, files: [file], preview };
-    }
-    return { ok: true, pass: false, content: `⚠️ 视觉 QA 未通过，请按缺陷改 pptxgenjs 代码后再次调用 make_pptx（本次未产出可下载文件）：\n\n${qa.report.slice(0, 2200)}`, files: [], preview: [] };
+    // 4. 【交付兜底】代码既然干净跑通并写出了 .pptx，就一定捕获文件——保证用户永远拿得到可下载稿，
+    //    杜绝「视觉判官反复不过 → 零文件 → 模型全量重写引入语法错误 → 17 分钟一场空」。
+    //    真正无文件的情况只剩：代码语法/运行时错误、或确定性硬卡口（对比度/越界/字号）throw —— 那些才是「稿真的坏了」，需模型修。
+    const file = await captureFile(pptxPath, fileName);
+    const preview = imgs.length ? await capturePreview(imgs) : [];
+    if (!qa) return { ok: true, pass: true, degraded: true, content: `PPT 已生成（视觉 QA 不可用，已跳过：${degradeMsg}）。`, files: [file], preview };
+    if (qa.pass) return { ok: true, pass: true, content: `✅ PPT 已生成并通过视觉 QA。\n${qa.report.slice(0, 600)}`, files: [file], preview };
+    // 视觉判官发现硬缺陷：文件仍交付（best-effort 可下载），附缺陷清单，由上层决定是否让模型再改一次
+    return { ok: true, pass: false, content: `⚠️ PPT 已生成且可下载，但视觉 QA 发现以下问题——如要改进，请仅针对这些点微调坐标/配色后再次调用 make_pptx（不要整份重写，避免引入语法错误）：\n\n${qa.report.slice(0, 2000)}`, files: [file], preview };
   } finally {
     fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
