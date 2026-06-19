@@ -1353,6 +1353,13 @@ async function chat(req, res) {
   let totalRounds = 0;
   let pptxVizFails = 0; // make_pptx 视觉判官不过的次数（每请求）；到上限后即便没过也交付，杜绝无限重改
   const PPTX_MAX_VIZ_RETRIES = 2;
+  // 「说了不做」兜底：用户请求了 PPT 但模型只是嘴上说"开始制作"就 end_turn 不发 make_pptx 调用 → 推它真的去调
+  const _userText = messages.filter(m => m.role === "user")
+    .map(m => typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map(b => (b && b.text) || "").join(" ") : "")
+    .join("\n");
+  const pptRequested = /(PPT|幻灯片|演示文稿|pptx|slide\s*deck|演示文案)/i.test(_userText);
+  let pptDelivered = false;
+  let pptNudges = 0;
 
   try {
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -1533,6 +1540,7 @@ async function chat(req, res) {
           }
           // If run_code produced downloadable doc files, mark done so AI won't re-generate HTML
           if (toolResult.codeResult.files.some(f => /\.(docx|xlsx|pptx|pdf)$/i.test(f.name))) {
+            if (toolResult.codeResult.files.some(f => /\.pptx$/i.test(f.name))) pptDelivered = true;
             // make_pptx 视觉判官未过：文件已作为 best-effort 交付（上方 artifact 已 emit），
             // 但允许模型最多再改 PPTX_MAX_VIZ_RETRIES 次；到上限则收手交付，避免反复重写 17 分钟一场空。
             if (tc.name === "make_pptx" && toolResult.codeResult.pass === false && pptxVizFails < PPTX_MAX_VIZ_RETRIES) {
@@ -1592,9 +1600,18 @@ async function chat(req, res) {
       continue; // Next round
     }
 
-    // No tool calls — check if model intended to use a tool but stream was cut short
+    // No tool calls this round — model may have narrated intent then ended turn without acting.
     if (result.textContent && !result.toolUseBlocks?.length && round < MAX_ROUNDS - 1) {
-      const text = result.textContent.slice(-200);
+      const text = result.textContent.slice(-300);
+      const looksLikeQuestion = /[？?]\s*$/.test(text.trim()) || /(请问|想要什么|哪种|是否需要|要不要|你希望)/.test(text);
+      // 用户要 PPT 但还没产出文件，而模型这轮没调任何工具（最常见：嘴上说"现在开始制作PPT"就 end_turn）→ 直接推它去调 make_pptx
+      if (pptRequested && !pptDelivered && !looksLikeQuestion && pptNudges < 3) {
+        pptNudges++;
+        console.log(`[Chat] Round ${round}: PPT requested but not delivered, no tool called — nudging make_pptx (${pptNudges}/3)`);
+        apiMessages.push({ role: "assistant", content: result.textContent });
+        apiMessages.push({ role: "user", content: "请立即调用 make_pptx 工具，把完整的 pptxgenjs 脚本作为 code 参数传入，现在就把这份 PPT 生成出来。不要只用文字描述、也不要说“即将开始”，直接发出 make_pptx 工具调用。" });
+        continue;
+      }
       const wantsArtifact = /生成|创建|整理成|输出|写一份|制作/.test(text) && /报告|文档|方案|调研|表格|artifact/i.test(text);
       if (wantsArtifact) {
         console.log(`[Chat] Round ${round}: detected unfinished artifact intent, auto-continuing`);
