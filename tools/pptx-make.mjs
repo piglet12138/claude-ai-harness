@@ -13,6 +13,7 @@ import { callClaudeVision } from "../lib/llm.mjs";
 const execFile = promisify(_execFile);
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const NM = path.join(projectRoot, "node_modules");
+const QA_PATH = path.join(projectRoot, "tools", "pptx-qa.cjs"); // 仓内，require('pptx-qa') 解析到这
 
 const PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 
@@ -34,7 +35,7 @@ D. 元素严重重叠（卡片叠卡片、图压字）。
 
 // 在临时目录跑模型写的 pptxgenjs 代码（注入 node_modules 解析），让它把 .pptx 落到该目录。
 async function runCode(code, workDir) {
-  const preamble = `const Module=require("module");const _r=Module._resolveFilename;Module._resolveFilename=function(req,par,...a){try{return _r.call(this,req,par,...a)}catch{return require.resolve(req,{paths:[${JSON.stringify(NM)}]})}};\n`;
+  const preamble = `process.on('unhandledRejection',e=>{console.error(e&&e.message||e);process.exit(1)});const Module=require("module");const _r=Module._resolveFilename;Module._resolveFilename=function(req,par,...a){if(req==='pptx-qa')return ${JSON.stringify(QA_PATH)};try{return _r.call(this,req,par,...a)}catch{return require.resolve(req,{paths:[${JSON.stringify(NM)}]})}};\n`;
   const file = path.join(workDir, "code.cjs");
   await fs.writeFile(file, preamble + code, "utf8");
   try {
