@@ -96,7 +96,7 @@ function instrument(slide) {
       els.push({
         role, x: o.x, y: o.y, w: o.w, h: o.h, text: args[0],
         color: o.color,                                   // addText 字色
-        fontSize: o.fontSize, bold: o.bold,               // addText 字号/粗体
+        fontSize: o.fontSize, bold: o.bold, underline: o.underline, // addText 字号/粗体/下划线
         fill: o.fill && (o.fill.color != null ? o.fill.color : o.fill), // addShape 填充色
         transparency: (o.fill && o.fill.transparency) || o.transparency, // 半透明则背景不确定
       });
@@ -153,14 +153,14 @@ function assertGeometry(slide, { W = 13.33, H = 7.5, tol = 0.12, kind = "content
       errs.push(`元素超出画布被裁切: ${e.role} "${String(e.text || "").slice(0, 14)}" @(${e.x},${e.y}) 尺寸(${e.w}x${e.h})，画布 ${W}x${H}`);
   }
 
-  // 卡片显著重叠
-  const cards = els.filter((e) => e.role === "card" && e.x != null && e.w != null);
+  // 卡片/横幅显著重叠（banner = callout/页脚条等满幅不透明条，纳入检测防压住卡片文字）
+  const cards = els.filter((e) => (e.role === "card" || e.role === "banner") && e.x != null && e.w != null);
   for (let i = 0; i < cards.length; i++) for (let j = i + 1; j < cards.length; j++) {
     const a = cards[i], b = cards[j];
     const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
     const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
     if (ox > 0.15 && oy > 0.15)
-      errs.push(`卡片显著重叠: #${i}(@${a.x},${a.y}) 与 #${j}(@${b.x},${b.y}) 重叠区约 ${ox.toFixed(2)}x${oy.toFixed(2)}`);
+      errs.push(`${a.role}/${b.role} 显著重叠: #${i}(@${a.x},${a.y}) 与 #${j}(@${b.x},${b.y}) 重叠区约 ${ox.toFixed(2)}x${oy.toFixed(2)}（横幅/卡片别压住彼此；拉开间距或缩小尺寸）`);
   }
 
   // 自动对比度 + 自动字号（只查文字元素）
@@ -169,6 +169,21 @@ function assertGeometry(slide, { W = 13.33, H = 7.5, tol = 0.12, kind = "content
     const txt = String(e.text == null ? "" : (Array.isArray(e.text) ? e.text.map(t => t && t.text || "").join("") : e.text));
     const isTitle = e.role === "title" || e.role === "kicker";
     const big = isTitle || e.bold || (e.fontSize != null && e.fontSize >= 18);
+
+    // 标题下划线（AI 味）：addText underline 属性直接拦（条状下划线请勿在标题下另画色条，提示词已禁）
+    if (isTitle && e.underline)
+      errs.push(`标题带下划线: "${txt.slice(0, 16)}" 去掉 underline（标题不要下划线，太 AI 味；要分隔用留白或同色块权重）`);
+
+    // 标题超框截断：单/多行估宽，放不下就报（保守：仅 title/section、明显放不下才报）
+    if ((e.role === "title" || e.role === "section") && e.fontSize != null && e.w > 0 && e.h > 0 && txt.length) {
+      let estW = 0; // 英寸：CJK≈1.05em、西文≈0.58em、其余≈0.5em；em=fontSize/72
+      for (const ch of txt) estW += (hasCJK(ch) ? 1.05 : /[A-Za-z0-9]/.test(ch) ? 0.58 : 0.5) * e.fontSize / 72;
+      const lineH = e.fontSize * 1.28 / 72;
+      const maxLines = Math.max(1, Math.floor(e.h / lineH));
+      const needLines = Math.ceil(estW / (e.w * 0.96));
+      if (needLines > maxLines && estW > e.w * 1.25)
+        errs.push(`标题可能超框截断: "${txt.slice(0, 16)}" 估需 ${needLines} 行但框高仅容 ${maxLines} 行（加宽文本框 w、降字号、或提高框高 h 让其换行）`);
+    }
 
     // 对比度：字色已知 + 背景能确切推断 + 颜色都可解析，才查（低假阳性）
     if (e.color != null && /^#?[0-9a-fA-F]{6}$/.test(String(e.color))) {
