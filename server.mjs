@@ -1366,7 +1366,8 @@ async function chat(req, res) {
   let pptDelivered = false;
   let pptNudges = 0;
   let forcePptxNextRound = false; // nudge 时置真：下一轮用 tool_choice 强制模型必出 make_pptx（网关认这个，探针实证）
-  let stallRetries = 0; // 网关 thinking-only 卡死响应的原样重发次数（每请求）
+  let stallRetries = 0; // thinking-only 卡死原样重发的全局计数（天花板 20）
+  const stallByRound = {}; // 每轮卡死重发次数（每轮上限 5，防规划轮饿死 build 轮）
 
   try {
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -1478,9 +1479,13 @@ async function chat(req, res) {
       const _visible = (result.textContent || "").trim();
       // result.stalled = 流式早退判定的卡死；或事后判定（无工具+文本近空+烧了大量 output token）
       const _stall = result.stalled || (!result.toolUseBlocks?.length && _visible.length < 4 && (result.outputTokens || 0) > 1200);
-      if (_stall && stallRetries < 8 && round < MAX_ROUNDS - 1) {
+      // 预算：每轮独立（防规划轮卡死耗光额度饿死 build 轮，arch 主题就是这么没产出的）+ 全局天花板防 runaway。
+      stallByRound[round] = (stallByRound[round] || 0) + 1;
+      if (_stall && stallByRound[round] <= 5 && stallRetries < 20 && round < MAX_ROUNDS - 1) {
         stallRetries++;
-        console.log(`[Chat] Round ${round}: thinking-only stall (out=${result.outputTokens}, no text/tool) — retrying same request (${stallRetries}/8)`);
+        console.log(`[Chat] Round ${round}: thinking-only stall (out=${result.outputTokens}, no text/tool) — retrying same request (round ${stallByRound[round]}/5, total ${stallRetries}/20)`);
+        // 心跳：卡死重发期间服务端对 SSE 流静默数十秒～数分钟，客户端(undici bodyTimeout ~300s/真实浏览器)会判定连接死掉 → 发注释帧保活。
+        try { res.write(": keepalive\n\n"); res.flush?.(); } catch {}
         round--; // 重做本轮（for 的 round++ 会抵消），用同一 apiMessages 再请求一次
         continue;
       }
